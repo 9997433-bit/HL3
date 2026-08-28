@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# HL3 artifacts: containers and benchmark output are regenerated, never committed.
+# Conformance fixtures under spec/conformance/ are the deliberate exception.
+*.hl3
+*.hl3z
+!spec/conformance/**/*.hl3
+/out/
+/bench-out/
