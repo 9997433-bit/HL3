@@ -12,6 +12,7 @@ accuracy figure rather than a self-consistency check.
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import math
 from pathlib import Path
@@ -22,6 +23,7 @@ import pytest
 from hl3.correlate import (
     BSplineInterpolator,
     ICGNParams,
+    ICGNResult,
     Status,
     compose_inverse,
     icgn_first_order,
@@ -129,6 +131,21 @@ def speckle_pair(
         reference = np.clip(reference + rng.normal(0, noise_sigma, reference.shape), 0, 255)
         deformed = np.clip(deformed + rng.normal(0, noise_sigma, deformed.shape), 0, 255)
 
+    return reference, deformed
+
+
+@functools.lru_cache(maxsize=32)
+def shared_pair(
+    shift: tuple[float, float], size: int = 192, noise_sigma: float = 0.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Cached :func:`speckle_pair`; generating the texture dominates test time.
+
+    The arrays are handed out read-only because they are shared: a test that
+    wants to paint a flat patch into one must copy it first.
+    """
+    reference, deformed = speckle_pair(shift, size=size, noise_sigma=noise_sigma)
+    reference.setflags(write=False)
+    deformed.setflags(write=False)
     return reference, deformed
 
 
@@ -378,3 +395,619 @@ def test_matches_round1_generator(tmp_path):
     assert np.all(result.status == int(Status.CONVERGED))
     errors = np.concatenate((result.u - args.tx, result.v - args.ty))
     assert float(np.mean(np.abs(errors))) < 0.05
+
+
+# --------------------------------------------------------------------------
+# Zero contrast
+#
+# Every test in this block asks the same question: when a subset carries no
+# information, does the solver say so, or does it return a number? The
+# threshold under test is relative to the *image's* contrast, which is what
+# makes it survive both halves of the trap -- a flat subset that is bright
+# enough for its resampling residue to clear an absolute floor, and a real
+# texture faint enough to fall below one.
+# --------------------------------------------------------------------------
+
+
+def _solve_points(reference, deformed, points, **kwargs) -> ICGNResult:
+    params = ICGNParams(subset_radius=kwargs.pop("subset_radius", 10), **kwargs)
+    return icgn_first_order(reference, deformed, np.asarray(points, float), params)
+
+
+def _status_of(result: ICGNResult, index: int = 0) -> Status:
+    return Status(int(result.status[index]))
+
+
+@pytest.mark.parametrize("level", [0.0, 1.0, 128.0, 255.0, 1.0e6])
+def test_flat_pair_is_singular_at_every_grey_level(level):
+    """A subset with no contrast has no solution, however bright it is.
+
+    Resampling residue scales with the grey level, so a fixed threshold on
+    the subset norm lets a bright flat patch through; measured against the
+    image's own contrast, all five levels are equally empty.
+    """
+    flat = np.full((64, 64), level)
+    result = _solve_points(flat, flat, [[32.0, 32.0]])
+    assert _status_of(result) is Status.SINGULAR_HESSIAN
+    assert result.zncc[0] == -1.0
+    assert not result.valid[0]
+    assert result.iterations[0] == 0
+    assert np.all(result.p == 0.0)
+
+
+@pytest.mark.parametrize("patch_level", [0.0, 255.0])
+def test_flat_patch_inside_texture_fails_only_inside_the_patch(patch_level):
+    """Crushed black and blown-out white, the two ways a sensor loses texture.
+
+    Such a patch has almost no grey level of its own, so judged against
+    itself the tail the B-spline prefilter leaks in from the surrounding
+    speckle looks like full-scale texture.
+    """
+    reference, deformed = (image.copy() for image in shared_pair((0.37, -0.42), 128))
+    reference[44:84, 44:84] = patch_level
+    deformed[44:84, 44:84] = patch_level
+
+    result = _solve_points(
+        reference, deformed, [[64.0, 64.0], [30.0, 30.0], [98.0, 98.0]]
+    )
+    assert _status_of(result) is Status.SINGULAR_HESSIAN
+    assert np.isnan(result.masked("u")[0])
+    assert np.all(result.valid[1:])
+    assert np.allclose(result.u[1:], 0.37, atol=5e-3)
+
+
+def test_flat_target_against_a_textured_reference_is_singular():
+    reference, _ = shared_pair((0.0, 0.0), 128)
+    result = _solve_points(reference, np.full_like(reference, 200.0), [[64.0, 64.0]])
+    assert _status_of(result) is Status.SINGULAR_HESSIAN
+    assert result.zncc[0] == -1.0
+
+
+@pytest.mark.parametrize("gain", [1e-30, 1e-15, 1e-6, 1e6])
+def test_faint_or_bright_texture_is_not_mistaken_for_flat(gain):
+    """Rescaling the grey range must not change the answer at all.
+
+    This is the other half of the flatness test. ZNSSD is exactly invariant
+    to ``g = a f + b``, so any threshold that is not relative would quietly
+    break that invariance at one end of the scale or the other.
+    """
+    reference, deformed = shared_pair((0.37, -0.42), 128)
+    params = ICGNParams(subset_radius=10, step=16)
+    points = make_grid(reference.shape, params, margin=INTERIOR_MARGIN)
+
+    plain = icgn_first_order(reference, deformed, points, params)
+    scaled = icgn_first_order(reference * gain, deformed * gain, points, params)
+
+    assert np.all(plain.valid)
+    assert np.array_equal(plain.status, scaled.status)
+    assert np.max(np.abs(plain.u - scaled.u)) < 1e-12
+    assert np.max(np.abs(plain.v - scaled.v)) < 1e-12
+
+
+def test_min_contrast_knob_rejects_faint_but_real_texture():
+    """The absolute floor is off by default and available when wanted."""
+    reference, deformed = shared_pair((0.37, -0.42), 128)
+    point = [[64.0, 64.0]]
+    assert _solve_points(reference, deformed, point).valid[0]
+    strict = _solve_points(reference, deformed, point, min_contrast=100.0)
+    assert _status_of(strict) is Status.SINGULAR_HESSIAN
+
+
+@pytest.mark.parametrize("period", [7.0, 13.0])
+def test_one_dimensional_texture_is_reported_singular(period):
+    """Stripes fix u and leave v free; the answer must be a status, not a 0.
+
+    The Hessian is rank-deficient in three of its six directions. Without a
+    conditioning test the diagonal loading turns that into a confident
+    ``v = 0`` carrying ZNCC = 1, which is the most dangerous kind of wrong.
+    """
+    _, xs = np.mgrid[0:96, 0:96].astype(float)
+    reference = 128.0 + 100.0 * np.sin(2.0 * math.pi * xs / period)
+    deformed = 128.0 + 100.0 * np.sin(2.0 * math.pi * (xs - 0.4) / period)
+    result = _solve_points(reference, deformed, [[48.0, 48.0]])
+    assert _status_of(result) is Status.SINGULAR_HESSIAN
+
+
+def test_two_dimensional_texture_of_the_same_kind_still_solves():
+    """Guard the conditioning gate from rejecting subsets that are usable."""
+    ys, xs = np.mgrid[0:96, 0:96].astype(float)
+
+    def wave(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        return 128.0 + 50.0 * (
+            np.sin(2.0 * math.pi * x / 7.0) + np.sin(2.0 * math.pi * y / 9.0)
+        )
+
+    result = _solve_points(wave(xs, ys), wave(xs - 0.4, ys - 0.25), [[48.0, 48.0]])
+    assert _status_of(result) is Status.CONVERGED
+    assert abs(result.u[0] - 0.4) < 2e-3
+    assert abs(result.v[0] - 0.25) < 2e-3
+
+
+@pytest.mark.parametrize("level", [0.0, 128.0, 1.0e6])
+def test_integer_search_reports_no_guess_on_a_flat_pair(level):
+    flat = np.full((64, 64), level)
+    assert integer_search_fftcc(flat, flat, (32.0, 32.0), 10, 5) == (0.0, 0.0, -1.0)
+
+
+def test_integer_search_reports_no_guess_when_its_window_leaves_the_image():
+    reference, deformed = shared_pair((0.4, 0.3), 128)
+    assert integer_search_fftcc(reference, deformed, (13.0, 64.0), 10, 12) == (
+        0.0,
+        0.0,
+        -1.0,
+    )
+
+
+def test_failed_integer_search_is_reported_not_silently_zero_seeded():
+    """A search that cannot run is not the same as a search that found zero.
+
+    The point sits inside the image, so it used to be solved from a zero
+    seed -- correct only while the displacement stays small, which is the
+    opposite of the reason a search radius was asked for in the first place.
+    """
+    reference, deformed = shared_pair((0.4, 0.3), 128)
+    result = _solve_points(
+        reference, deformed, [[13.0, 64.0], [64.0, 64.0]], search_radius=12
+    )
+    assert _status_of(result) is Status.NO_INITIAL_GUESS
+    assert result.iterations[0] == 0
+    assert result.zncc[0] == -1.0
+    assert np.isnan(result.masked("u")[0])
+    assert result.valid[1]
+
+
+def test_the_default_grid_margin_never_triggers_a_failed_search():
+    """Bounding the cost of the rule above: the default margin already
+    includes the search radius, so ``NO_INITIAL_GUESS`` is reserved for
+    points a caller placed closer to the border than their own search."""
+    reference, deformed = shared_pair((0.4, 0.3), 128)
+    params = ICGNParams(subset_radius=10, step=16, search_radius=8)
+    points = make_grid(reference.shape, params)
+    result = icgn_first_order(reference, deformed, points, params)
+    assert not np.any(result.status == int(Status.NO_INITIAL_GUESS))
+
+
+def test_failed_points_carry_no_covariance():
+    reference, deformed = (image.copy() for image in shared_pair((0.37, -0.42), 128))
+    reference[44:84, 44:84] = 255.0
+    deformed[44:84, 44:84] = 255.0
+    result = _solve_points(
+        reference,
+        deformed,
+        [[64.0, 64.0], [30.0, 30.0]],
+        compute_covariance=True,
+        image_noise_sigma=1.0,
+    )
+    assert np.all(np.isnan(result.covariance[0]))
+    assert np.all(np.isfinite(result.covariance[1]))
+
+
+# --------------------------------------------------------------------------
+# Empty AOI
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "empty", [np.empty((0, 2)), np.zeros((0, 2)), [], np.array([])]
+)
+def test_empty_aoi_returns_empty_arrays(base_pair, empty):
+    """No points is a legitimate AOI, not an error: an entirely masked frame
+    or a filtered point list reaches the solver this way."""
+    reference, deformed, _ = base_pair
+    result = icgn_first_order(reference, deformed, empty, ICGNParams(subset_radius=10))
+
+    assert result.n_points == 0
+    for name in ("x", "y", "zncc", "iterations", "status", "u", "v"):
+        assert getattr(result, name).shape == (0,)
+    assert result.p.shape == (0, 6)
+    assert result.iterations.dtype == np.int32
+    assert result.valid.shape == (0,)
+    assert result.masked("u").shape == (0,)
+    assert result.status_counts() == {}
+    assert result.covariance is None
+
+
+def test_empty_aoi_keeps_the_covariance_block_shape(base_pair):
+    reference, deformed, _ = base_pair
+    params = ICGNParams(
+        subset_radius=10, compute_covariance=True, image_noise_sigma=1.0
+    )
+    result = icgn_first_order(reference, deformed, np.empty((0, 2)), params)
+    assert result.covariance is not None
+    assert result.covariance.shape == (0, 6, 6)
+
+
+def test_aoi_entirely_outside_the_image_yields_no_valid_points(base_pair):
+    """The AOI is non-empty but nothing in it is computable."""
+    reference, deformed, _ = base_pair
+    result = _solve_points(
+        reference, deformed, [[2.0, 2.0], [3.0, 189.0], [189.0, 3.0]]
+    )
+    assert result.status_counts() == {Status.OUT_OF_BOUNDS: 3}
+    assert np.all(np.isnan(result.masked("u")))
+    assert np.all(result.iterations == 0)
+
+
+def test_make_grid_rejects_a_margin_that_leaves_no_room():
+    with pytest.raises(ValueError, match="too small"):
+        make_grid((40, 40), ICGNParams(subset_radius=10), margin=20)
+
+
+def test_make_grid_rejects_a_negative_margin():
+    with pytest.raises(ValueError, match="margin"):
+        make_grid((40, 40), ICGNParams(subset_radius=10), margin=-1)
+
+
+def test_status_counts_reports_a_mixed_aoi():
+    reference, deformed = (image.copy() for image in shared_pair((0.37, -0.42), 128))
+    reference[44:84, 44:84] = 255.0
+    deformed[44:84, 44:84] = 255.0
+    result = _solve_points(
+        reference, deformed, [[2.0, 2.0], [64.0, 64.0], [30.0, 30.0], [98.0, 98.0]]
+    )
+    assert result.status_counts() == {
+        Status.CONVERGED: 2,
+        Status.OUT_OF_BOUNDS: 1,
+        Status.SINGULAR_HESSIAN: 1,
+    }
+
+
+# --------------------------------------------------------------------------
+# Integer and integer-plus-subpixel translation
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("shift", [(1.0, 0.0), (0.0, -1.0), (2.0, 3.0), (3.0, -2.0)])
+def test_integer_translation_is_recovered_without_a_seed(shift):
+    """Whole-pixel shifts carry no interpolation error, so they are the case
+    where the solver has nowhere to hide: the answer should be exact."""
+    reference, deformed = shared_pair(shift, 160)
+    params = ICGNParams(subset_radius=10, step=16)
+    points = make_grid(reference.shape, params, margin=45)
+    result = icgn_first_order(reference, deformed, points, params)
+
+    assert np.all(result.valid)
+    assert np.max(np.abs(result.u - shift[0])) < 1e-4
+    assert np.max(np.abs(result.v - shift[1])) < 1e-4
+    assert np.max(np.abs(result.p[:, [1, 2, 4, 5]])) < 1e-5
+    assert result.zncc.min() > 0.9999
+
+
+@pytest.mark.parametrize("shift", [(3.25, -2.4), (4.5, 3.75), (-5.1, 2.6)])
+def test_integer_plus_subpixel_is_seeded_by_the_integer_search(shift):
+    reference, deformed = shared_pair(shift, 176)
+    params = ICGNParams(subset_radius=10, step=16, search_radius=8)
+    points = make_grid(reference.shape, params, margin=50)
+    result = icgn_first_order(reference, deformed, points, params)
+
+    assert np.all(result.valid)
+    assert np.max(np.abs(result.u - shift[0])) < 5e-3
+    assert np.max(np.abs(result.v - shift[1])) < 5e-3
+
+    u0, v0, zncc = integer_search_fftcc(reference, deformed, (88.0, 88.0), 10, 8)
+    assert abs(u0 - shift[0]) <= 0.5
+    assert abs(v0 - shift[1]) <= 0.5
+    assert zncc > 0.9
+
+
+@pytest.mark.parametrize("phase", [0.0, 0.25, 0.5, 0.75])
+def test_a_whole_pixel_offset_does_not_change_the_subpixel_bias(phase):
+    """Interpolation bias is a property of the phase, not of the integer part.
+
+    Same S-curve as ``test_subpixel_phase_sweep``, ridden on top of a 4 px
+    offset that the FFT-CC seed has to remove first.
+    """
+    shift = (4.0 + phase, -3.0)
+    reference, deformed = shared_pair(shift, 176)
+    params = ICGNParams(subset_radius=10, step=16, search_radius=8)
+    points = make_grid(reference.shape, params, margin=50)
+    result = icgn_first_order(reference, deformed, points, params)
+
+    assert np.all(result.valid)
+    assert abs(float(np.mean(result.u - shift[0]))) < 3e-3
+    assert abs(float(np.mean(result.v - shift[1]))) < 3e-3
+
+
+def test_pull_in_range_of_the_unseeded_solver_is_about_three_pixels():
+    """Records where the zero seed stops working, so a regression in the
+    seed path shows up as lost coverage rather than as silent inaccuracy."""
+    params = ICGNParams(subset_radius=10, step=16)
+
+    def hit_rate(u_true: float) -> float:
+        reference, deformed = shared_pair((u_true, 0.0), 160)
+        points = make_grid(reference.shape, params, margin=45)
+        result = icgn_first_order(reference, deformed, points, params)
+        return float(np.mean(result.valid & (np.abs(result.u - u_true) < 1e-3)))
+
+    assert hit_rate(3.0) == 1.0
+    assert hit_rate(5.0) < 0.5
+
+
+def test_initial_guess_may_be_one_row_for_the_whole_grid():
+    """A single integer guess broadcast over the AOI: the cheap alternative
+    to a per-point search when the motion is known to be uniform."""
+    reference, deformed = shared_pair((7.35, -5.6), 192)
+    params = ICGNParams(subset_radius=10, step=16)
+    points = make_grid(reference.shape, params, margin=60)
+    result = icgn_first_order(
+        reference, deformed, points, params, initial_guess=np.array([[7.0, -6.0]])
+    )
+    assert np.all(result.valid)
+    assert np.max(np.abs(result.u - 7.35)) < 0.01
+    assert np.max(np.abs(result.v + 5.6)) < 0.01
+
+
+# --------------------------------------------------------------------------
+# Remaining status codes
+# --------------------------------------------------------------------------
+
+
+def test_status_enum_covers_the_spec_failure_set():
+    """R1-O1 §2.6 and §4.3 list nine outcomes; all nine must be expressible."""
+    assert {status.name for status in Status} == {
+        "UNCOMPUTED",
+        "CONVERGED",
+        "LOW_ZNCC",
+        "NOT_CONVERGED",
+        "OUT_OF_BOUNDS",
+        "SINGULAR_HESSIAN",
+        "DIVERGED",
+        "NO_INITIAL_GUESS",
+        "MASKED",
+    }
+    assert len({int(status) for status in Status}) == 9
+
+
+def test_low_zncc_marks_the_point_but_keeps_its_solution():
+    """Spec §2.6: below the threshold the result is retained and flagged, so
+    it can be reported, not deleted."""
+    reference, deformed = shared_pair((0.37, -0.42), 128)
+    result = _solve_points(
+        reference,
+        deformed,
+        [[64.0, 64.0]],
+        zncc_min=1.0,
+        compute_covariance=True,
+        image_noise_sigma=1.0,
+    )
+    assert _status_of(result) is Status.LOW_ZNCC
+    assert not result.valid[0]
+    assert abs(result.u[0] - 0.37) < 5e-3
+    assert np.isnan(result.masked("u")[0])
+    assert np.all(np.isfinite(result.covariance[0]))
+
+
+def test_iteration_budget_exhaustion_is_reported():
+    reference, deformed = shared_pair((0.37, -0.42), 128)
+    result = _solve_points(reference, deformed, [[64.0, 64.0]], max_iter=1)
+    assert _status_of(result) is Status.NOT_CONVERGED
+    assert result.iterations[0] == 1
+    assert not result.valid[0]
+
+
+def test_max_disp_guard_reports_divergence():
+    reference, deformed = shared_pair((0.37, -0.42), 128)
+    result = _solve_points(reference, deformed, [[64.0, 64.0]], max_disp=0.05)
+    assert _status_of(result) is Status.DIVERGED
+    assert not result.valid[0]
+
+
+def test_masked_blanks_whole_rows_of_p():
+    reference, deformed = shared_pair((0.37, -0.42), 128)
+    result = _solve_points(reference, deformed, [[2.0, 2.0], [64.0, 64.0]])
+    masked = result.masked("p")
+    assert np.all(np.isnan(masked[0]))
+    assert np.all(np.isfinite(masked[1]))
+
+
+@pytest.mark.parametrize("field_name", ["covariance", "status", "valid", "nope"])
+def test_masked_rejects_fields_it_cannot_blank(base_pair, field_name):
+    reference, deformed, _ = base_pair
+    result = _solve_points(reference, deformed, [[96.0, 96.0]])
+    with pytest.raises(ValueError, match="cannot mask"):
+        result.masked(field_name)
+
+
+# --------------------------------------------------------------------------
+# Input validation
+#
+# The B-spline prefilter is an IIR recursion in both axes, so a single
+# non-finite pixel does not stay local: it reaches every coefficient. That is
+# why images are checked once at the boundary instead of per point.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_image",
+    [
+        pytest.param(np.full((24, 24), np.nan), id="nan"),
+        pytest.param(np.full((24, 24), np.inf), id="inf"),
+        pytest.param(np.zeros(24), id="1d"),
+        pytest.param(np.zeros((0, 4)), id="empty"),
+    ],
+)
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(BSplineInterpolator, id="interpolator"),
+        pytest.param(reference_gradients, id="gradients"),
+        pytest.param(
+            lambda img: integer_search_fftcc(img, img, (10.0, 10.0), 4, 2),
+            id="fftcc",
+        ),
+        pytest.param(
+            lambda img: icgn_first_order(
+                img, img, np.array([[10.0, 10.0]]), ICGNParams(subset_radius=4)
+            ),
+            id="solver",
+        ),
+    ],
+)
+def test_public_entry_points_validate_their_images(call, bad_image):
+    with pytest.raises(ValueError):
+        call(bad_image)
+
+
+def test_one_nan_pixel_stops_the_solver_rather_than_spreading(base_pair):
+    reference, deformed, _ = base_pair
+    poisoned = reference.copy()
+    poisoned[0, 0] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        _solve_points(poisoned, deformed, [[96.0, 96.0]])
+
+
+def test_solver_rejects_mismatched_image_shapes(base_pair):
+    reference, deformed, _ = base_pair
+    with pytest.raises(ValueError, match="same shape"):
+        icgn_first_order(reference, deformed[:-1], None, ICGNParams())
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"subset_radius": 1}, "subset_radius"),
+        ({"step": 0}, "step"),
+        ({"max_iter": 0}, "max_iter"),
+        ({"search_radius": -1}, "search_radius"),
+        ({"conv_tol": 0.0}, "conv_tol"),
+        ({"conv_tol": math.nan}, "conv_tol"),
+        ({"zncc_min": 1.5}, "zncc_min"),
+        ({"max_disp": 0.0}, "max_disp"),
+        ({"max_disp": math.inf}, "max_disp"),
+        ({"hessian_reg": -1.0}, "hessian_reg"),
+        ({"image_noise_sigma": -1.0}, "image_noise_sigma"),
+        ({"min_contrast": -1.0}, "min_contrast"),
+        ({"max_hessian_cond": 1.0}, "max_hessian_cond"),
+    ],
+)
+def test_params_reject_nonsense(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        ICGNParams(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "points",
+    [
+        pytest.param(np.zeros((3, 3)), id="three-columns"),
+        pytest.param(np.array([1.0, 2.0, 3.0]), id="odd-length"),
+        pytest.param(np.array([[np.nan, 1.0]]), id="nan"),
+        pytest.param(np.array([[1.0, np.inf]]), id="inf"),
+    ],
+)
+def test_solver_rejects_malformed_points(base_pair, points):
+    reference, deformed, _ = base_pair
+    with pytest.raises(ValueError, match="points"):
+        icgn_first_order(reference, deformed, points, ICGNParams(subset_radius=10))
+
+
+@pytest.mark.parametrize(
+    "guess",
+    [
+        pytest.param(np.zeros((2, 3)), id="wrong-shape"),
+        pytest.param(np.array([[np.nan, 0.0]]), id="nan"),
+    ],
+)
+def test_solver_rejects_a_malformed_initial_guess(base_pair, guess):
+    reference, deformed, _ = base_pair
+    with pytest.raises(ValueError, match="initial_guess"):
+        icgn_first_order(
+            reference,
+            deformed,
+            np.array([[96.0, 96.0]]),
+            ICGNParams(subset_radius=10),
+            initial_guess=guess,
+        )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda img: integer_search_fftcc(img, img, (32.0, 32.0), 0, 2),
+            id="radius-zero",
+        ),
+        pytest.param(
+            lambda img: integer_search_fftcc(img, img, (32.0, 32.0), 4, -1),
+            id="negative-search",
+        ),
+        pytest.param(
+            lambda img: integer_search_fftcc(img, img, (np.nan, 32.0), 4, 2),
+            id="nan-point",
+        ),
+    ],
+)
+def test_integer_search_validates_its_arguments(call):
+    reference, _ = shared_pair((0.0, 0.0), 64)
+    with pytest.raises(ValueError):
+        call(reference)
+
+
+# --------------------------------------------------------------------------
+# Interpolator and shape-function algebra
+# --------------------------------------------------------------------------
+
+
+def test_bspline_accepts_a_scalar_and_broadcasts_mixed_shapes(base_pair):
+    reference, _, _ = base_pair
+    interp = BSplineInterpolator(reference)
+
+    scalar = interp.sample(20.0, 30.0)
+    assert scalar.shape == ()
+    assert abs(float(scalar) - reference[30, 20]) < 1e-9
+
+    row = interp.sample(np.array([20.0, 21.0]), 30.0)
+    assert row.shape == (2,)
+    assert np.allclose(row, reference[30, 20:22], atol=1e-9)
+
+
+@pytest.mark.parametrize("coordinate", [np.nan, np.inf])
+def test_bspline_rejects_non_finite_coordinates(base_pair, coordinate):
+    """``floor(nan).astype(int64)`` is undefined and folds to some valid
+    index, so an unchecked NaN returns a plausible grey value."""
+    reference, _, _ = base_pair
+    interp = BSplineInterpolator(reference)
+    with pytest.raises(ValueError, match="finite"):
+        interp.sample(np.array([coordinate]), np.array([10.0]))
+
+
+def test_gradient_of_a_single_row_image_is_zero_across_the_row():
+    fx, fy = reference_gradients(np.arange(6.0).reshape(1, 6))
+    assert np.allclose(fx, 1.0)
+    assert np.all(fy == 0.0)
+
+
+@pytest.mark.parametrize(
+    "bad", [np.zeros(5), np.zeros(7), np.full(6, np.nan), np.zeros((2, 6))]
+)
+def test_warp_matrix_rejects_malformed_parameter_vectors(bad):
+    with pytest.raises(ValueError):
+        warp_matrix(bad)
+
+
+def test_warp_params_rejects_a_matrix_that_is_not_3x3():
+    with pytest.raises(ValueError, match="3x3"):
+        warp_params(np.eye(2))
+
+
+def test_compose_inverse_rejects_a_singular_increment():
+    collapsed = np.array([0.0, -1.0, 0.0, 0.0, 0.0, -1.0])
+    with pytest.raises(np.linalg.LinAlgError):
+        compose_inverse(np.zeros(6), collapsed)
+
+
+def test_compose_inverse_matches_explicit_matrix_algebra():
+    """The closed-form 2x2 inverse must agree with the 3x3 matrix route."""
+    rng = np.random.default_rng(11)
+    for _ in range(20):
+        p = rng.normal(0.0, 0.05, 6)
+        dp = rng.normal(0.0, 0.05, 6)
+        expected = warp_params(warp_matrix(p) @ np.linalg.inv(warp_matrix(dp)))
+        assert np.allclose(compose_inverse(p, dp), expected, atol=1e-12)
+
+
+def test_compose_inverse_accepts_a_large_but_invertible_increment():
+    """The singularity test is relative to the block, so a big step passes."""
+    dp = np.array([50.0, 0.4, -0.3, -70.0, 0.2, 0.5])
+    composed = compose_inverse(np.zeros(6), dp)
+    assert np.all(np.isfinite(composed))
+    assert np.allclose(compose_inverse(dp, dp), np.zeros(6), atol=1e-12)

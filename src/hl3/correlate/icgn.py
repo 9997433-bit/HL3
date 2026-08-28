@@ -868,9 +868,7 @@ def _empty_result(params: ICGNParams) -> ICGNResult:
         iterations=np.zeros(0, dtype=np.int32),
         status=np.zeros(0, dtype=np.int32),
         covariance=(
-            np.zeros((0, 6, 6), dtype=np.float64)
-            if params.compute_covariance
-            else None
+            np.zeros((0, 6, 6), dtype=np.float64) if params.compute_covariance else None
         ),
     )
 
