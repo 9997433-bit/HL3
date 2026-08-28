@@ -93,7 +93,10 @@ def _render(
 
 
 def speckle_sequence(
-    shifts: list[tuple[float, float]], size: int = 128, oversample: int = 6, seed: int = 20260828
+    shifts: list[tuple[float, float]],
+    size: int = 128,
+    oversample: int = 6,
+    seed: int = 20260828,
 ) -> list[np.ndarray]:
     """One image per requested shift, normalised to 0..255 grey."""
     spectrum = _speckle_spectrum(size, oversample, seed)
@@ -112,6 +115,9 @@ def translation_sequence() -> tuple[list[np.ndarray], list[tuple[float, float]]]
 
 
 PAIR_CONFIG = Dic2DConfig(icgn=ICGNParams(subset_radius=10, step=10), margin=34)
+#: Coarse grid on a 96x96 MockCapture frame; used where the point is the
+#: plumbing rather than the numbers.
+QUICK_CONFIG = Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20)
 
 
 # --------------------------------------------------------------------------
@@ -159,7 +165,9 @@ def test_compose_total_matches_matrix_product():
 
 
 def test_compose_total_is_identity_on_a_zero_accumulator():
-    segment = np.array([[0.3, 0.01, 0.02, -0.4, 0.03, 0.04], [1.0, 0.0, 0.0, 2.0, 0.0, 0.0]])
+    segment = np.array(
+        [[0.3, 0.01, 0.02, -0.4, 0.03, 0.04], [1.0, 0.0, 0.0, 2.0, 0.0, 0.0]]
+    )
     assert np.array_equal(compose_total(np.zeros_like(segment), segment), segment)
 
 
@@ -267,9 +275,11 @@ def test_runs_are_bit_for_bit_reproducible():
     config = Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=12), margin=20)
     first = run_sequence(mock_frames(3), config)
     second = run_sequence(mock_frames(3), config)
-    assert np.array_equal(first.field("u", masked=False), second.field("u", masked=False))
+    for name in ("u", "v", "zncc"):
+        assert np.array_equal(
+            first.field(name, masked=False), second.field(name, masked=False)
+        )
     assert np.array_equal(first.field("status"), second.field("status"))
-    assert np.array_equal(first.field("zncc", masked=False), second.field("zncc", masked=False))
 
 
 # --------------------------------------------------------------------------
@@ -310,7 +320,10 @@ def test_seed_modes_agree_on_a_well_posed_sequence(translation_sequence):
     )
     # And it is not doing more work: a carried seed starts inside the basin.
     later = slice(1, None)
-    assert prev.field("iterations")[later].sum() <= zero.field("iterations")[later].sum()
+    assert (
+        prev.field("iterations")[later].sum()
+        <= zero.field("iterations")[later].sum()
+    )
 
 
 # --------------------------------------------------------------------------
@@ -352,14 +365,14 @@ def test_failed_points_are_nan_in_masked_fields_and_diagnosed_in_status():
 
 
 def test_field_rejects_unknown_names():
-    run = run_sequence(mock_frames(2), Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20))
+    run = run_sequence(mock_frames(2), QUICK_CONFIG)
     with pytest.raises(ValueError, match="unknown field"):
         run.field("E_xx")
 
 
 def test_shape_function_gradients_are_exposed_but_not_turned_into_strain():
     """The pipeline reports ``p``'s gradients; tensors belong to hl3.strain."""
-    run = run_sequence(mock_frames(2), Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20))
+    run = run_sequence(mock_frames(2), QUICK_CONFIG)
     for name in ("u_x", "u_y", "v_x", "v_y"):
         assert np.allclose(run.field(name), 0.0, atol=1e-4)
 
@@ -478,7 +491,7 @@ def test_a_later_reference_frame_is_allowed_when_fixed():
 
 def test_a_plain_image_stack_is_accepted():
     stack = np.stack([frame.image for frame in mock_frames(3)]).astype(np.float64)
-    run = run_sequence(stack, Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20))
+    run = run_sequence(stack, QUICK_CONFIG)
     assert run.n_frames == 3
     assert np.allclose(run.frames[2].u, 4.0, atol=1e-6)
 
@@ -610,9 +623,7 @@ def stub_strain(u, v, valid=None, window=5, step_px=1.0):
 
 def test_missing_strain_module_downgrades_the_run(monkeypatch):
     hide_strain(monkeypatch)
-    run = run_sequence(
-        mock_frames(2), Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20)
-    )
+    run = run_sequence(mock_frames(2), QUICK_CONFIG)
 
     assert run.strain.available is False
     assert "hl3.strain" in run.strain.reason
@@ -625,20 +636,14 @@ def test_missing_strain_module_downgrades_the_run(monkeypatch):
 
 def test_strain_field_on_a_downgraded_run_says_why(monkeypatch):
     hide_strain(monkeypatch)
-    run = run_sequence(
-        mock_frames(2), Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20)
-    )
+    run = run_sequence(mock_frames(2), QUICK_CONFIG)
     with pytest.raises(StrainUnavailableError, match="hl3.strain"):
         run.strain_field("E_xx")
 
 
 def test_required_strain_turns_a_missing_module_into_a_failure(monkeypatch):
     hide_strain(monkeypatch)
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16),
-        margin=20,
-        strain_mode=StrainMode.REQUIRED,
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_mode=StrainMode.REQUIRED)
     with pytest.raises(StrainUnavailableError, match="hl3.strain"):
         run_sequence(mock_frames(2), config)
 
@@ -648,11 +653,7 @@ def test_strain_off_never_looks_for_the_module(monkeypatch):
         raise AssertionError(f"strain lookup must not happen, got {name!r}")
 
     monkeypatch.setattr(dic2d.importlib, "import_module", explode)
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16),
-        margin=20,
-        strain_mode=StrainMode.OFF,
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_mode=StrainMode.OFF)
     run = run_sequence(mock_frames(2), config)
     assert run.strain.available is False
     assert run.strain.reason == "strain_mode is OFF"
@@ -669,9 +670,7 @@ def test_a_module_that_explodes_on_import_downgrades(monkeypatch):
     assert backend is None and name is None
     assert "RuntimeError" in reason and "not importable" in reason
 
-    run = run_sequence(
-        mock_frames(2), Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20)
-    )
+    run = run_sequence(mock_frames(2), QUICK_CONFIG)
     assert run.strain.available is False
     assert np.allclose(run.frames[1].u, 2.0, atol=1e-6)
 
@@ -711,9 +710,7 @@ def test_an_injected_backend_wins_over_the_module(monkeypatch):
     def other(u, v, **kwargs):
         return {"E_xx": np.zeros_like(np.asarray(u, dtype=np.float64))}
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16), margin=20, strain_backend=other
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=other)
     run = run_sequence(mock_frames(2), config)
     assert run.strain.backend == "other"
     assert run.strain.names == ("E_xx",)
@@ -726,9 +723,7 @@ def test_the_payload_is_trimmed_to_the_backend_signature():
         seen.append({"u", "v"})
         return {"E_xx": np.zeros_like(np.asarray(u, dtype=np.float64))}
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16), margin=20, strain_backend=narrow
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=narrow)
     run = run_sequence(mock_frames(2), config)
     assert run.strain.available is True
     assert len(seen) == run.n_frames
@@ -741,15 +736,12 @@ def test_a_backend_taking_var_keywords_gets_the_whole_payload():
         captured.update(kwargs)
         return {"E_xx": np.zeros_like(np.asarray(kwargs["u"], dtype=np.float64))}
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16), margin=20, strain_backend=greedy
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=greedy)
     run = run_sequence(mock_frames(2), config)
 
     assert run.strain.available is True
-    assert {"x", "y", "u", "v", "valid", "zncc", "window", "step_px", "grid_shape"} <= set(
-        captured
-    )
+    expected = {"x", "y", "u", "v", "valid", "zncc", "window", "step_px", "grid_shape"}
+    assert expected <= set(captured)
     assert captured["window"] == config.strain_window
     assert captured["step_px"] == float(config.step)
     assert np.asarray(captured["u"]).shape == run.grid_shape
@@ -765,9 +757,7 @@ def test_a_grid_backend_is_offered_gridded_arrays_first():
         shapes.append(u.shape)
         return {"E_xx": np.zeros_like(u)}
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16), margin=20, strain_backend=grid_only
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=grid_only)
     run = run_sequence(mock_frames(2), config)
     assert run.strain.available is True
     assert shapes == [run.grid_shape] * run.n_frames
@@ -783,9 +773,7 @@ def test_a_flat_backend_is_still_reached_when_the_grid_call_fails():
         shapes.append(u.shape)
         return {"E_xx": np.zeros_like(u)}
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16), margin=20, strain_backend=flat_only
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=flat_only)
     run = run_sequence(mock_frames(2), config)
     assert run.strain.available is True
     assert shapes == [(run.n_points,)] * run.n_frames
@@ -795,9 +783,7 @@ def test_an_incompatible_backend_is_reported_not_raised():
     def hostile(**kwargs):
         raise RuntimeError("strain module still under construction")
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16), margin=20, strain_backend=hostile
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=hostile)
     run = run_sequence(mock_frames(2), config)
 
     assert run.strain.available is False
@@ -810,22 +796,15 @@ def test_an_incompatible_backend_fails_the_run_when_strain_is_required():
     def hostile(**kwargs):
         raise RuntimeError("no strain today")
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16),
-        margin=20,
-        strain_backend=hostile,
-        strain_mode=StrainMode.REQUIRED,
+    config = dataclasses.replace(
+        QUICK_CONFIG, strain_backend=hostile, strain_mode=StrainMode.REQUIRED
     )
     with pytest.raises(StrainUnavailableError, match="no strain today"):
         run_sequence(mock_frames(2), config)
 
 
 def test_a_backend_returning_nothing_useful_is_reported():
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16),
-        margin=20,
-        strain_backend=lambda **kwargs: 42,
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=lambda **kwargs: 42)
     run = run_sequence(mock_frames(2), config)
     assert run.strain.available is False
     assert "mapping" in run.strain.reason
@@ -838,9 +817,8 @@ def test_an_object_returning_backend_is_unpacked():
             self.v_y = np.zeros_like(u)
             self.window = 5  # not an array; must be dropped, not crash
 
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16),
-        margin=20,
+    config = dataclasses.replace(
+        QUICK_CONFIG,
         strain_backend=lambda u, **kwargs: Gradients(np.asarray(u, dtype=np.float64)),
     )
     run = run_sequence(mock_frames(2), config)
@@ -849,9 +827,7 @@ def test_an_object_returning_backend_is_unpacked():
 
 
 def test_strain_field_rejects_unknown_names():
-    config = Dic2DConfig(
-        icgn=ICGNParams(subset_radius=8, step=16), margin=20, strain_backend=stub_strain
-    )
+    config = dataclasses.replace(QUICK_CONFIG, strain_backend=stub_strain)
     run = run_sequence(mock_frames(2), config)
     with pytest.raises(ValueError, match="unknown strain field"):
         run.strain_field("E_zz")
@@ -884,9 +860,7 @@ def test_the_merged_strain_module_closes_the_chain():
 def test_the_real_strain_module_is_used_when_it_is_importable():
     """Whatever hl3.strain currently is, the pipeline's verdict must be honest."""
     backend, name, reason = resolve_strain_backend()
-    run = run_sequence(
-        mock_frames(2), Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20)
-    )
+    run = run_sequence(mock_frames(2), QUICK_CONFIG)
     assert reason
     if backend is None:
         assert run.strain.available is False

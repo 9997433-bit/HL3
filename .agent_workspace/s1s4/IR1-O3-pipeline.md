@@ -16,9 +16,9 @@ ACTUAL_MODEL_SLUG: claude-opus-5-thinking-high-fast
 
 | 项 | 数值 |
 |---|---|
-| **新增代码** | `src/hl3/pipeline/dic2d.py` **989 行** + `src/hl3/pipeline/__init__.py` 46 行 |
-| **新增测试** | `tests/test_pipeline_2d.py` **900 行 / 62 个用例**，`62 passed in 4.23s` |
-| 全仓（CI 口径 `pytest -q`） | **`460 passed in 17.52s`**，0 failed |
+| **新增代码** | `src/hl3/pipeline/dic2d.py` **992 行** + `src/hl3/pipeline/__init__.py` 46 行 |
+| **新增测试** | `tests/test_pipeline_2d.py` **874 行 / 62 个用例**，`62 passed in 4.46s` |
+| 全仓（CI 口径 `pytest -q`） | **`460 passed in 18.18s`**，0 failed |
 | **固定参考下与内核逐位一致** | `np.array_equal(run.frames[1].p_total, icgn_first_order(...).p)` → **True**（`zncc`、`status` 同为 True） |
 | 亚像素精度（傅里叶位移散斑，128²，subset 21×21，36 POI） | 逐帧 mean\|误差\| **7.585e−04 / 1.001e−03 / 8.834e−04 px**，max **5.7e−03 px** |
 | 吞吐 | **770 POI-solves/s**（4 帧 × 36 POI，含参考帧自相关，单线程纯 NumPy） |
@@ -34,9 +34,9 @@ ACTUAL_MODEL_SLUG: claude-opus-5-thinking-high-fast
 
 | 文件 | 改动 |
 |---|---|
-| `src/hl3/pipeline/dic2d.py` | 新增，989 行 |
+| `src/hl3/pipeline/dic2d.py` | 新增，992 行 |
 | `src/hl3/pipeline/__init__.py` | 新增，46 行（只做再导出） |
-| `tests/test_pipeline_2d.py` | 新增，900 行 / 62 用例 |
+| `tests/test_pipeline_2d.py` | 新增，874 行 / 62 用例 |
 | `src/hl3/__init__.py` | `__all__ = ["correlate"]` → `["correlate", "pipeline"]`，**仅此一行** |
 | `.agent_workspace/s1s4/IR1-O3-pipeline.md` | 本报告 |
 

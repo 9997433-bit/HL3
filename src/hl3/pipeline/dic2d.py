@@ -302,8 +302,9 @@ class Dic2DRun:
 
     def valid_mask(self) -> np.ndarray:
         """``(n_frames, ...)`` boolean array of converged points."""
-        stacked = np.stack([f.valid for f in self.frames]) if self.frames else _empty(bool)
-        return self._shape(stacked)
+        if not self.frames:
+            return self._shape(_empty(bool))
+        return self._shape(np.stack([f.valid for f in self.frames]))
 
     def field(self, name: str, masked: bool = True) -> np.ndarray:
         """A ``(n_frames, ny, nx)`` field, or ``(n_frames, n_points)`` off-grid.
@@ -942,7 +943,9 @@ def _strain_one(
     raise TypeError("; ".join(errors))
 
 
-def _accepted(backend: Callable[..., Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+def _accepted(
+    backend: Callable[..., Any], payload: Mapping[str, Any]
+) -> dict[str, Any]:
     """Drop payload keys the backend does not declare.
 
     A backend whose signature cannot be inspected (a C extension, say) is given
