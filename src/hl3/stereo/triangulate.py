@@ -144,7 +144,10 @@ def _as_pixels(x: np.ndarray, name: str = "x") -> np.ndarray:
     a = np.asarray(x, dtype=float)
     if a.ndim == 2 and a.shape[1] == 2:
         return a
-    if a.ndim > 2 or a.size % 2 != 0:
+    # Only a flat array is reshaped. Silently reinterpreting an (N, 3) array as
+    # pixels whenever 3N happens to be even is how a swapped argument survives
+    # to become a plausible-looking answer.
+    if a.ndim != 1 or a.size % 2 != 0:
         raise ValueError(f"{name} must be an (N, 2) pixel array, got shape {a.shape}")
     return a.reshape(-1, 2)
 
@@ -154,7 +157,7 @@ def _as_points(X: np.ndarray, name: str = "X") -> np.ndarray:
     a = np.asarray(X, dtype=float)
     if a.ndim == 2 and a.shape[1] == 3:
         return a
-    if a.ndim > 2 or a.size % 3 != 0:
+    if a.ndim != 1 or a.size % 3 != 0:
         raise ValueError(f"{name} must be an (N, 3) point array, got shape {a.shape}")
     return a.reshape(-1, 3)
 
