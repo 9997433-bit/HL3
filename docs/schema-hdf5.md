@@ -489,7 +489,7 @@ HL3-2D（单相机平面 DIC）与 HL3-3D（立体/多目 DIC）共用同一个�
 
 ## 12. 一致性验证
 
-参考实现提供：
+规范要求参考实现提供：
 
 ```bash
 hl3 validate file.hl3            # 结构 + 必填字段 + 交叉引用完整性
@@ -497,6 +497,14 @@ hl3 validate file.hl3 --strict   # 追加：SHOULD 级检查、哈希校验、�
 hl3 diff a.hl3 b.hl3             # 逐字段对比，用于回归
 hl3 repack file.hl3 --layout point_major   # 重排分块以适配时程分析
 ```
+
+**实现现状（截至当前提交，勿与上表混淆）**：`hl3` 命令行、`diff`、`repack` 与 `spec/conformance/` 样例集**均未实现**。今天真正存在的只有 Python 层的等价入口
+
+```bash
+python -m hl3.io.hdf5_schema selftest   # 写入合成算例 → 读回 → 与解析解逐位比对 → validate + strict
+```
+
+即 `validate_file(path, strict=...)`（对应上表第 1、2 行）与 `write_synthetic_hl3()` / `read_analysis()`。下表的用例分类是**目标集合**；`tests/test_hdf5_schema.py` 目前以 23 个测试覆盖其中的「2D 完整」一条、若干「非法」项（缺根属性、保留位、主版本过高、结构违规）与写入器确定性，其余类别尚无样例文件。
 
 `spec/conformance/` 提供样例集，每个用例含 `input.hl3` + `expected.json` + `README`：
 
@@ -661,6 +669,7 @@ with h5py.File("bending.hl3", "r") as f:
 | A-4 | 附录 A.1（新增） | zstd 由硬性默认改为「默认值，可降级为 gzip 或不压缩，但 `@compression` 必须如实写明」；一致性样例应当只用内置过滤器 | zstd 是 HDF5 注册过滤器不是内置过滤器，原装 h5py 打不开；不修正则 §12 样例集事实上不可读 |
 | A-5 | §13（新增） | 规范条款 ↔ 参考实现符号的映射表、依赖分层说明、合成算例定义 | R1 承诺了「参考实现 + 一致性套件」，Round 2 把它落到具体符号上，避免散文与代码各自漂移 |
 | A-6 | 文首、附录 D | 补 `SPDX-License-Identifier: CC-BY-4.0`；声明参考实现不取代附录 D 的独立可运行示例 | ADR-LIC-001 执行规则 1 |
+| A-7 | §12（Round 3 / R3-O3） | 在 `hl3 validate` 等命令块后补「实现现状」段：命令行、`diff`、`repack` 与 `spec/conformance/` 样例集尚未实现，今天可用的只有 `validate_file()` 与 `python -m hl3.io.hdf5_schema selftest`；样例分类是目标集合，并注明现有 23 个测试实际覆盖到哪几类 | 散文用现在时描述未落地的 CLI，读者会误以为可用；本条只加实现现状说明，**未改动任何规范性要求**，版本号仍为 `1.0.0-draft.2` |
 
 **仍然悬空、交给 Round 3 的条款**（本轮未擅自定稿）：
 
