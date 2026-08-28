@@ -52,10 +52,12 @@ __all__ = [
     "icgn_first_order",
 ]
 
-# A zero-mean subset norm below this fraction of the subset's own RMS grey
-# level is floating-point residue from resampling a constant patch, not
-# texture. Double-precision resampling leaves ~1e-14 relative; real speckle
-# sits at ~1e-1 relative, so five orders of headroom either way.
+# A subset whose RMS contrast is below this fraction of the whole image's
+# contrast is floating-point residue -- the B-spline prefilter is an IIR
+# recursion, so texture outside a flat patch leaks a decaying tail into it --
+# rather than something to correlate. Double-precision resampling leaves
+# ~1e-14 relative; real speckle sits at ~1e-1 relative, so there are five
+# decades of headroom on either side.
 _CONTRAST_REL_EPS = 1e-9
 
 
@@ -94,7 +96,11 @@ class ICGNParams:
     search_radius: int = 0  # FFT-CC integer search half-width; 0 disables
     compute_covariance: bool = False
     image_noise_sigma: float = 0.0  # grey levels, for the covariance estimate
-    min_contrast: float = 1e-9  # grey levels RMS, absolute floor for flat subsets
+    # Absolute RMS-contrast floor in grey levels. The default 0 leaves only
+    # the relative test, which keeps the solver exactly as gain-invariant as
+    # ZNSSD itself; raise it to reject subsets that are technically textured
+    # but too faint to be worth correlating.
+    min_contrast: float = 0.0
     max_hessian_cond: float = 1e10  # spec §2.6: cond(H) above this is singular
 
     def __post_init__(self) -> None:
@@ -198,16 +204,31 @@ def _as_image(image: np.ndarray, name: str) -> np.ndarray:
     return array
 
 
-def _is_flat(norm: float, count: int, level: float, min_contrast: float) -> bool:
+def _contrast_scale(image: np.ndarray) -> float:
+    """Grey-level contrast of a whole image, as the yardstick for flatness.
+
+    The standard deviation is used rather than the mean level because it is
+    the part of the image that survives the affine grey change ``g = a f + b``
+    the way a subset's contrast does: both scale by ``a`` and neither moves
+    with ``b``, so the ratio the flatness test forms is invariant.
+    """
+    return float(np.std(image))
+
+
+def _is_flat(norm: float, count: int, scale: float, min_contrast: float) -> bool:
     """True when a zero-mean subset norm is resampling residue, not texture.
 
-    ``level`` is the subset's own RMS grey level, so the test is invariant to
-    the affine grey change ``g = a f + b`` that ZNSSD is built to absorb --
-    an absolute threshold would wrongly flag a faint image and wrongly pass a
-    flat but bright one.
+    ``scale`` is the parent image's contrast from :func:`_contrast_scale`. It
+    deliberately is *not* the subset's own level: a crushed-black or saturated
+    patch has almost no level of its own, so measured against itself the
+    prefilter's leaked tail would look like full-scale texture.
     """
+    if scale <= 0.0:
+        # An image with no contrast anywhere has no textured subset; what the
+        # interpolator returns for one is round-off in the basis weights.
+        return True
     rms_contrast = norm / math.sqrt(count)
-    return rms_contrast <= max(min_contrast, _CONTRAST_REL_EPS * level)
+    return rms_contrast <= max(min_contrast, _CONTRAST_REL_EPS * scale)
 
 
 # --------------------------------------------------------------------------
@@ -402,7 +423,8 @@ def integer_search_fftcc(
     point: tuple[float, float],
     radius: int,
     search_radius: int,
-    min_contrast: float = 1e-9,
+    min_contrast: float = 0.0,
+    contrast_scale: float | None = None,
 ) -> tuple[float, float, float]:
     """Integer-pixel ``(u, v, zncc)`` for one point by FFT cross-correlation.
 
@@ -414,6 +436,10 @@ def integer_search_fftcc(
     Returns ``(0.0, 0.0, -1.0)`` when no candidate is usable -- the window
     leaves the image, or either patch is flat -- so a ``zncc`` of ``-1``
     always means "no integer guess", never "guess of zero".
+
+    ``contrast_scale`` is the grey-level yardstick for that flatness test; it
+    is recomputed from the images when omitted, so callers in a per-point
+    loop should pass the value in.
     """
     reference = _as_image(reference, "reference")
     target = _as_image(target, "target")
@@ -425,6 +451,8 @@ def integer_search_fftcc(
         raise ValueError("search_radius must be >= 0")
     if not (math.isfinite(point[0]) and math.isfinite(point[1])):
         raise ValueError("point must be finite")
+    if contrast_scale is None:
+        contrast_scale = max(_contrast_scale(reference), _contrast_scale(target))
     x0 = int(round(point[0]))
     y0 = int(round(point[1]))
     n = 2 * radius + 1
@@ -449,8 +477,7 @@ def integer_search_fftcc(
 
     zero_mean = subset - subset.mean()
     ref_norm = math.sqrt(float(np.sum(zero_mean * zero_mean)))
-    ref_level = math.sqrt(float(np.mean(subset * subset)))
-    if _is_flat(ref_norm, subset.size, ref_level, min_contrast):
+    if _is_flat(ref_norm, subset.size, contrast_scale, min_contrast):
         return 0.0, 0.0, -1.0
 
     spectrum = np.conj(np.fft.rfft2(zero_mean, s=(m, m))) * np.fft.rfft2(window)
@@ -465,11 +492,11 @@ def integer_search_fftcc(
     np.maximum(variance, 0.0, out=variance)
     window_norm = np.sqrt(variance)
 
-    # Same relative flatness test as the solver, applied per candidate: a
-    # window of constant grey has a norm made of round-off, and dividing by it
-    # would manufacture a correlation peak out of nothing.
-    flat = window_norm / math.sqrt(count) <= np.maximum(
-        min_contrast, _CONTRAST_REL_EPS * np.sqrt(sums_sq / count)
+    # Same flatness test as the solver, applied per candidate: a window of
+    # constant grey has a norm made of round-off, and dividing by it would
+    # manufacture a correlation peak out of nothing.
+    flat = window_norm / math.sqrt(count) <= max(
+        min_contrast, _CONTRAST_REL_EPS * contrast_scale
     )
 
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -630,6 +657,9 @@ def icgn_first_order(
     dx = dx.ravel()
     dy = dy.ravel()
 
+    ref_scale = _contrast_scale(reference)
+    tgt_scale = _contrast_scale(target)
+
     ref_interp = BSplineInterpolator(reference)
     tgt_interp = BSplineInterpolator(target)
     grad_x, grad_y = reference_gradients(reference)
@@ -637,7 +667,13 @@ def icgn_first_order(
     gy_interp = BSplineInterpolator(grad_y)
 
     seeds, seed_ok = _resolve_initial_guess(
-        reference, target, points, params, initial_guess, n_points
+        reference,
+        target,
+        points,
+        params,
+        initial_guess,
+        n_points,
+        max(ref_scale, tgt_scale),
     )
 
     p_out = np.zeros((n_points, 6), dtype=np.float64)
@@ -674,8 +710,7 @@ def icgn_first_order(
         f_mean = f.mean()
         f_centred = f - f_mean
         f_norm = math.sqrt(float(np.dot(f_centred, f_centred)))
-        f_level = math.sqrt(float(np.dot(f, f)) / f.size)
-        if _is_flat(f_norm, f.size, f_level, params.min_contrast):
+        if _is_flat(f_norm, f.size, ref_scale, params.min_contrast):
             status_out[index] = int(Status.SINGULAR_HESSIAN)
             continue
 
@@ -725,8 +760,7 @@ def icgn_first_order(
             g = tgt_interp.sample(warped_x, warped_y)
             g_centred = g - g.mean()
             g_norm = math.sqrt(float(np.dot(g_centred, g_centred)))
-            g_level = math.sqrt(float(np.dot(g, g)) / g.size)
-            if _is_flat(g_norm, g.size, g_level, params.min_contrast):
+            if _is_flat(g_norm, g.size, tgt_scale, params.min_contrast):
                 status = int(Status.SINGULAR_HESSIAN)
                 break
 
@@ -767,8 +801,7 @@ def icgn_first_order(
                 g = tgt_interp.sample(warped_x, warped_y)
                 g_centred = g - g.mean()
                 g_norm = math.sqrt(float(np.dot(g_centred, g_centred)))
-                g_level = math.sqrt(float(np.dot(g, g)) / g.size)
-                if _is_flat(g_norm, g.size, g_level, params.min_contrast):
+                if _is_flat(g_norm, g.size, tgt_scale, params.min_contrast):
                     status = int(Status.SINGULAR_HESSIAN)
                     zncc = -1.0
                 else:
@@ -866,6 +899,7 @@ def _resolve_initial_guess(
     params: ICGNParams,
     initial_guess: np.ndarray | None,
     n_points: int,
+    contrast_scale: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Seeds plus a per-point flag saying whether a seed could be produced.
 
@@ -903,6 +937,7 @@ def _resolve_initial_guess(
                 params.subset_radius,
                 params.search_radius,
                 params.min_contrast,
+                contrast_scale,
             )
             if zncc <= -1.0:
                 seed_ok[index] = False
