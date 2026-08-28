@@ -117,6 +117,23 @@ F-1 我可以在自己的两个文件里满足（已满足），但不去动别�
 
 ---
 
+## 6.1 共享 checkout 事故（如实记录）
+
+R2-O1 在上一轮点名过的结构性风险这一轮又发生了一次，这次落在我头上，必须记下来：
+
+- 我 `git checkout -b cursor/r3-o3-docs-align-6edb` 之后、写文件期间，R3-F1 在**同一个工作树**上提交了 `681c572`，于是它成了我这条分支的第一个提交；
+- 我执行 `git add README.md docs/schema-hdf5.md && git commit` 时，**共享 index 里还有别人 `git add` 进去但未提交的文件**，因此 `ec0bb94` 除了我的两个文件外，还捎带了 `R3-F2-claims-legal-scan.md`、`R3-F4-beyond-vic-roadmap.md`、`R3-G2-metrics-run.md` 与 `benchmarks/metrology/metrics.json`。
+
+处置与理由：
+
+1. **不回退、不 amend、不 force-push。** 我逐个检查过这 4 个文件的首尾，内容完整（不是写到一半被抓拍），而且 `git ls-tree` 显示它们目前**只存在于我这条分支**——删掉等于把别人的成果弄丢。
+2. 我这条分支上的其余提交只含我自己的文件（`7822a38` = 本报告，1 个文件）。
+3. 之后再提交时我会先看 `git diff --cached --name-only`，必要时用 `git commit -o <路径>` 只提交指定文件。
+
+给父调度器的建议同 R2-O1，且这次证据更充分：**并行子代理必须各自 `git worktree`**。共享 checkout 下 index、HEAD 和分支指针都是全局可变状态，`git add <文件>` 的精确性救不了你——别人先 `add` 的东西会搭上你的 commit。
+
+---
+
 ## 7. 复现本报告
 
 ```bash
