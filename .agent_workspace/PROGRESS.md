@@ -1,7 +1,7 @@
 # HL3 DIC 应变分析软件 — 主调度器进度
 
 - **任务目标**：规划并分阶段建设两款 DIC 应变分析软件（二维 / 三维），对标并最终超过 Correlated Solutions 的 VIC-2D 与 VIC-3D。
-- **当前阶段**：竞品公开分析 + 开源算法调研 + 详细实施计划（不做盗版安装、不做逆向）。
+- **当前阶段**：S1–S4 实施（用户要求做到 S4 停止总结）。SOP 每轮 10=4/3/3，共 3 轮实施。S5/S6 不做。
 - **工作分支**：`cursor/dic-sota-plan-259d`  
   （平台强制模板 `cursor/<name>-259d`；SOP 中的 `agent/<task-name>` 映射为本分支。）
 - **父模型**：Cursor Grok 4.6（`cursor-grok-4.6-high`）
@@ -23,7 +23,9 @@
 | Round 1 初始构建与基线探索 | COMPLETE | **10**（4/3/3） | `round1/` + `ROUND1_BRIEF.md` |
 | Round 2 靶向重构与深度优化 | COMPLETE | **10**（4/3/3） | `round2/` + `ROUND2_BRIEF.md` |
 | Round 3 SOTA 打磨与最终验收 | COMPLETE | **10**（4/3/3） | `round3/` + `ROUND3_BRIEF.md`；pytest **232 passed** |
-| Round 3 SOTA 打磨与最终验收 | PENDING | **10**（4/3/3） | `round3/` |
+| Impl-R1（S1） | IN_PROGRESS | **10**（4/3/3） | `s1s4/` + strain + 2D pipeline |
+| Impl-R2（S2+S3） | PENDING | **10**（4/3/3） | stereo match + UQ |
+| Impl-R3（S4） | PENDING | **10**（4/3/3） | CLI/GUI/FEA；然后停止 |
 
 ## 法律与环境红线
 
