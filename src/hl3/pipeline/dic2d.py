@@ -833,12 +833,12 @@ def resolve_strain_backend(
 
     try:
         module = importlib.import_module("hl3.strain")
-    except ImportError as error:
-        return (
-            None,
-            None,
-            f"hl3.strain is not importable ({error}); displacement only",
-        )
+    except Exception as error:  # noqa: BLE001
+        # Not just ImportError: a module discovered at run time can also be
+        # half-written or raise on import, and neither is a reason to lose a
+        # correlation result that has already been computed.
+        detail = f"{type(error).__name__}: {error}"
+        return None, None, f"hl3.strain is not importable ({detail}); displacement only"
 
     for attribute in STRAIN_ENTRY_POINTS:
         candidate = getattr(module, attribute, None)

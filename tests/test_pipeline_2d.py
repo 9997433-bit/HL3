@@ -658,6 +658,24 @@ def test_strain_off_never_looks_for_the_module(monkeypatch):
     assert run.strain.reason == "strain_mode is OFF"
 
 
+def test_a_module_that_explodes_on_import_downgrades(monkeypatch):
+    """A half-merged strain module must not take a correlation run with it."""
+
+    def refuse(name, *args, **kwargs):
+        raise RuntimeError("cannot import name 'DEFAULT_WINDOW' from hl3.strain.pls")
+
+    monkeypatch.setattr(dic2d.importlib, "import_module", refuse)
+    backend, name, reason = resolve_strain_backend()
+    assert backend is None and name is None
+    assert "RuntimeError" in reason and "not importable" in reason
+
+    run = run_sequence(
+        mock_frames(2), Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=16), margin=20)
+    )
+    assert run.strain.available is False
+    assert np.allclose(run.frames[1].u, 2.0, atol=1e-6)
+
+
 def test_a_module_without_a_known_entry_point_downgrades(monkeypatch):
     install_strain(monkeypatch, some_helper=lambda: None)
     backend, name, reason = resolve_strain_backend()
