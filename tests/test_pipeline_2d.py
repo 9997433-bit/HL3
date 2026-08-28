@@ -43,6 +43,7 @@ from hl3.pipeline.dic2d import (
     lattice_shape,
     resolve_strain_backend,
     run_sequence,
+    strain_step_px,
     vsg_size_px,
 )
 
@@ -872,3 +873,57 @@ def test_the_real_strain_module_is_used_when_it_is_importable():
     else:
         # Present but not callable with this payload: say so, keep the run.
         assert name in run.strain.reason
+
+
+def _lattice(pitch: float, start: float = 20.0, stop: float = 80.0) -> np.ndarray:
+    xs = np.arange(start, stop, pitch, dtype=np.float64)
+    ys = np.arange(start, stop, pitch, dtype=np.float64)
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    return np.column_stack((grid_x.ravel(), grid_y.ravel()))
+
+
+def test_strain_step_follows_the_poi_lattice_not_config_step():
+    """A coarser user grid must not inherit ICGNParams.step as strain pitch."""
+    captured: dict[str, object] = {}
+
+    def greedy(**kwargs):
+        captured.update(kwargs)
+        u = np.asarray(kwargs["u"], dtype=np.float64)
+        return {"E_xx": np.zeros_like(u)}
+
+    params = ICGNParams(subset_radius=8, step=5)
+    points = _lattice(10.0)
+    config = Dic2DConfig(icgn=params, margin=20, strain_backend=greedy)
+    run = run_sequence(mock_frames(2, size=96), config, points=points)
+    assert run.strain.available is True
+    assert captured["step_px"] == 10.0
+    assert captured["step"] == 10
+    assert run.provenance["strain_step_px"] == 10.0
+    assert run.provenance["step"] == 5
+
+
+def test_default_grid_strain_step_matches_icgn_step():
+    assert strain_step_px(
+        make_grid((96, 96), QUICK_CONFIG.icgn, margin=20), QUICK_CONFIG.step
+    ) == float(QUICK_CONFIG.step)
+
+
+def test_anisotropic_poi_pitch_is_rejected_when_strain_runs():
+    xs = np.arange(20.0, 80.0, 10.0)
+    ys = np.arange(20.0, 80.0, 8.0)
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+    config = Dic2DConfig(
+        icgn=ICGNParams(subset_radius=8, step=5),
+        strain_mode=StrainMode.REQUIRED,
+        strain_backend=lambda u, v, **kwargs: {
+            "E_xx": np.zeros_like(np.asarray(u))
+        },
+    )
+    with pytest.raises(ValueError, match="anisotropic"):
+        run_sequence(mock_frames(2, size=96), config, points=points)
+
+
+def test_second_order_pipeline_config_is_refused():
+    with pytest.raises(ValueError, match="first-order"):
+        Dic2DConfig(icgn=ICGNParams(shape_order=2))

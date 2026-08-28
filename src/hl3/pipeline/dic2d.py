@@ -56,6 +56,7 @@ __all__ = [
     "lattice_shape",
     "resolve_strain_backend",
     "run_sequence",
+    "strain_step_px",
     "vsg_size_px",
 ]
 
@@ -164,6 +165,14 @@ class Dic2DConfig:
             raise ValueError(
                 "reference updates require reference_index == 0; frames before "
                 "the reference cannot be reached by forward accumulation"
+            )
+        if self.icgn.shape_order != 1:
+            raise ValueError(
+                "Dic2DConfig only runs first-order IC-GN; "
+                f"got shape_order={self.icgn.shape_order}. Call "
+                "hl3.correlate.icgn_second_order directly, or set "
+                "shape_order=1. Silently ignoring the field would misreport "
+                "which warp produced the result"
             )
 
     @property
@@ -451,6 +460,50 @@ def lattice_shape(points: np.ndarray) -> tuple[int, int] | None:
     if not np.array_equal(expected, points):
         return None
     return int(ys.size), int(xs.size)
+
+
+def strain_step_px(points: np.ndarray, config_step: int) -> float:
+    """Pitch the strain backend must divide by, in pixels.
+
+    :func:`make_grid` uses ``ICGNParams.step`` as the POI lattice pitch, so
+    the two numbers agree for a pipeline-built grid. A caller-supplied
+    lattice can be coarser or finer; using ``config.step`` then silently
+    scales every strain component (a factor-of-two error when the lattice
+    pitch is ``2 * config.step``). Scattered point sets have no unique
+    pitch and keep ``config.step`` for the backend's own scatter path.
+    Anisotropic lattices raise rather than pick an axis in silence.
+    """
+    if lattice_shape(points) is None:
+        return float(config_step)
+    coords = np.asarray(points, dtype=np.float64)
+    xs = np.unique(coords[:, 0])
+    ys = np.unique(coords[:, 1])
+    dxs = np.diff(xs)
+    dys = np.diff(ys)
+    if dxs.size:
+        if not np.allclose(dxs, dxs[0], rtol=0.0, atol=1e-9):
+            raise ValueError("POI x-coordinates are not equally spaced")
+        dx = float(dxs[0])
+    else:
+        dx = float("nan")
+    if dys.size:
+        if not np.allclose(dys, dys[0], rtol=0.0, atol=1e-9):
+            raise ValueError("POI y-coordinates are not equally spaced")
+        dy = float(dys[0])
+    else:
+        dy = float("nan")
+    finite = [value for value in (dx, dy) if math.isfinite(value)]
+    if not finite:
+        return float(config_step)
+    if len(finite) == 2 and abs(finite[0] - finite[1]) > 1e-9:
+        raise ValueError(
+            f"anisotropic POI pitch (dx={finite[0]} px, dy={finite[1]} px) "
+            "is not supported; strain uses a single step_px"
+        )
+    pitch = finite[0]
+    if pitch <= 0.0:
+        raise ValueError(f"POI pitch must be positive, got {pitch}")
+    return pitch
 
 
 # --------------------------------------------------------------------------
@@ -765,6 +818,18 @@ def _provenance(
     """The parameter/quality snapshot required by spec §1.11 for reporting."""
     params = config.icgn
     valid = [o.valid_fraction for o in outcomes]
+    # Only consult the lattice pitch when strain actually ran: a
+    # displacement-only sequence may use an anisotropic point set.
+    if strain.available:
+        measured_step = strain_step_px(grid, params.step)
+        measured_vsg = vsg_size_px(
+            params.subset_size,
+            max(1, int(round(measured_step))),
+            config.strain_window,
+        )
+    else:
+        measured_step = float(params.step)
+        measured_vsg = config.l_vsg_px
     return {
         "solver": "hl3.correlate.icgn_first_order",
         "shape_function": "first_order_affine",
@@ -788,7 +853,8 @@ def _provenance(
             o.index for o in outcomes if o.reference_updated
         ),
         "strain_window": config.strain_window,
-        "l_vsg_px": config.l_vsg_px,
+        "strain_step_px": measured_step,
+        "l_vsg_px": measured_vsg,
         "valid_fraction_min": min(valid) if valid else 0.0,
         "valid_fraction_mean": float(np.mean(valid)) if valid else 0.0,
         "strain": {
@@ -869,10 +935,16 @@ def _run_strain(
         return StrainOutcome(False, reason)
 
     grid_shape = lattice_shape(grid)
+    # Pitch is a pipeline contract, not a backend failure: a wrong step_px
+    # silently scales the whole strain field, so it must not be swallowed by
+    # the AUTO degradation path below.
+    step_px = strain_step_px(grid, config.step)
     frames: list[Mapping[str, np.ndarray]] = []
     try:
         for outcome in outcomes:
-            frames.append(_strain_one(backend, config, grid, grid_shape, outcome))
+            frames.append(
+                _strain_one(backend, config, grid, grid_shape, outcome, step_px)
+            )
     except Exception as error:
         # A downstream module that is present but does not fit the contract is
         # the same kind of event as one that is absent: the correlation result
@@ -891,6 +963,7 @@ def _strain_one(
     grid: np.ndarray,
     grid_shape: tuple[int, int] | None,
     outcome: FrameOutcome,
+    step_px: float,
 ) -> Mapping[str, np.ndarray]:
     """Call the backend with the first payload shape it accepts.
 
@@ -915,8 +988,12 @@ def _strain_one(
         "valid": valid,
         "zncc": outcome.zncc,
         "window": config.strain_window,
-        "step": config.step,
-        "step_px": float(config.step),
+        "step": (
+            int(round(step_px))
+            if abs(step_px - round(step_px)) < 1e-9
+            else step_px
+        ),
+        "step_px": float(step_px),
         "subset_size": config.subset_size,
         "subset_px": config.subset_size,
         "grid_shape": grid_shape,

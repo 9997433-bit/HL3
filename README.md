@@ -6,7 +6,7 @@
 
 HL3 是一套**开放、可审计**的数字图像相关（DIC）测量内核，目标覆盖 **HL3-2D**（单相机平面 DIC）与 **HL3-3D**（立体 / 多目 DIC）两条产品线，二者共用同一个 `hl3-core` 地基。
 
-> **当前状态：三轮调度完成，预 alpha。** 这是规划 + 测量内核地基，不是生产级 VIC 替代品。CPU 参考相关器、立体几何与线性标定原型、合成采集与 HDF5 容器读写，本机 **232 个测试**全绿，原则是「先正确、后快」。
+> **当前状态：S1–S4 预 alpha。** 这是可审计的 CPU/NumPy 测量内核 + 离线 2D 无头链，**不是** VIC-2D 8 / VIC-3D 11 的可替换产品。算法对标与超越公式均未闭合，见 [`.agent_workspace/s1s4/IR4_USER_SUMMARY.md`](.agent_workspace/s1s4/IR4_USER_SUMMARY.md)。原则是「先正确、后快」；吞吐数字未经公平对比协议测量。
 
 ---
 
@@ -16,9 +16,9 @@ HL3 是一套**开放、可审计**的数字图像相关（DIC）测量内核，
 
 | 缺口 | HL3 的做法 |
 |------|-----------|
-| **结果无法独立复核**：相关器与文件格式封闭，第三方既不能验证数字，也不能无损搬走数据 | 文件格式是**带版本号的公开规范** + 纯 h5py 参考读取器 + 结构验证器。见 [`docs/schema-hdf5.md`](docs/schema-hdf5.md) |
-| **不确定度是事后报告**：多数实现只给一个相关系数 | 不确定度是**与位移场同生命周期的字段**（`u_std` / `v_std` / `w_std` / `cov_uvw`），并按图像噪声、匹配病态、标定误差三来源分解。目前落地的是匹配项：相关器的 `(n, 6, 6)` 参数协方差与三角化的 `3×3` 位置协方差 |
-| **平台与脚本是二等公民**：Windows-only、Python 接口后加 | Python 优先、跨平台；GUI 只是命令总线的一个客户端，每个动作先有可序列化命令、再有按钮 |
+| **结果无法独立复核**：相关器与文件格式封闭，第三方既不能验证数字，也不能无损搬走数据 | 文件格式是**带版本号的公开规范** + 纯 h5py 参考读取器 + 结构验证器。见 [`docs/schema-hdf5.md`](docs/schema-hdf5.md)。`hl3 run` 目前仍写 `.npz`；完整 `.hl3` 写出尚未接到测量链 |
+| **不确定度往往不可复算**：商业软件公开有逐点匹配/三角化 `Sigma`（且明确不含 bias） | 不确定度是**与位移场同生命周期的字段**（`u_std` / `v_std` / `w_std` / `cov_uvw`）。目前落地的是匹配项协方差，以及位移方差 → 应变标准差的传播；**重叠 subset 下预测偏紧，不得当验收置信区间** |
+| **平台与脚本是二等公民**：分析端以 Windows 为主 | Python 优先、Linux/无头/CI 一等公民。VIC 已有官方 `vicpyx` 与社区扩展索引，因此「有 Python」本身不再是差异点 |
 
 五条设计铁律（详见 [`.agent_workspace/round1/R1-O3-shared-kernel.md`](.agent_workspace/round1/R1-O3-shared-kernel.md)）：
 
@@ -33,28 +33,34 @@ HL3 是一套**开放、可审计**的数字图像相关（DIC）测量内核，
 ```bash
 git clone https://github.com/9997433-bit/HL3.git && cd HL3
 python3 -m pip install -e '.[test,hdf5]'
-python3 -m pytest -q tests src/tests        # 232 passed，4 vCPU 上约 13 s
+python3 -m pytest -q tests src/tests        # 708 passed on this S4 收口 revision
 ```
 
 运行时依赖只有 **NumPy**：`h5py` 仅在真正读写 `.hl3` 文件时需要（缺失时相关测试自动跳过而不是失败），`blake3` 缺失时哈希如实降级为 `blake2b-256`。不装包也可以直接用源码树：`PYTHONPATH=src python3 -m pytest -q tests src/tests`。
 
-| 模块 | 行数 | 已实现的内容 | 测试 | 状态 |
-|------|-----:|------|-----:|------|
-| [`src/hl3/correlate/icgn.py`](src/hl3/correlate/icgn.py) | — | 一阶（仿射）IC-GN：ZNSSD、ZNCC、B 样条插值、FFT-CC 初值、秩亏 Hessian 门、状态码、可选协方差 | 127 | Round 3 加固后的 CPU 规范实现 |
-| [`src/hl3/stereo/triangulate.py`](src/hl3/stereo/triangulate.py) | — | 针孔 `P=K[R|t]`、极线度量、四档三角化、单点 NaN 隔离、位置协方差 | 71（与 `calibrate.py` 共用） | 原型：纯 L0 针孔，**无镜头畸变 / 无显微镜实现** |
-| [`src/hl3/stereo/calibrate.py`](src/hl3/stereo/calibrate.py) | 1098 | 合成双目机位与靶标生成、像素噪声注入、线性 DLT 相机反解（resection）、RQ 分解还原 `K, R, t`、Umeyama 刚体/相似配准、位姿与三维误差度量、端到端合成实验驱动 | 同上 | 原型：**只有线性 DLT 反解，不是 Zhang 平面标定** |
-| [`src/hl3/io/hdf5_schema.py`](src/hl3/io/hdf5_schema.py) | 1296 | `.hl3` 容器的组名/属性/数据集/枚举/位域常量（规范的机器可读镜像）、规范化 JSON 与内容/配置哈希、参考写入器（解析解合成场）、纯 h5py 参考读取器、结构验证器（含 `strict` 级） | 23 | schema 草案已冻结为 `1.0.0-draft.2` |
-| [`src/hl3/capture/mock.py`](src/hl3/capture/mock.py) | 135 | 确定性无硬件采集：可控丢帧、噪声、时间戳抖动，供 CPU-only CI 使用 | 9 | 可用 |
-| [`tests/test_env_guards.py`](tests/test_env_guards.py) | — | 执行策略护栏：CI 不得跑在 Windows、不得出现 VIC 安装环境变量、CPU-only 车道必须显式声明 | 2 | 可用 |
+| 模块 | 已实现的内容 | 状态 |
+|------|------|------|
+| [`src/hl3/correlate/icgn.py`](src/hl3/correlate/icgn.py) | 一阶 + 二阶 IC-GN：ZNSSD、ZNCC、B 样条、FFT-CC、秩亏 Hessian、状态码、可选协方差 | CPU 规范实现；2D pipeline 只接线一阶 |
+| [`src/hl3/strain/`](src/hl3/strain/) | PLS、工程/GL/EA/Hencky、VSG、`compute_strain` | 合成平移下应变≈0；实拍噪声门未闭合 |
+| [`src/hl3/pipeline/dic2d.py`](src/hl3/pipeline/dic2d.py) | 序列相关、参考更新、应变移交；应变 pitch 取自 POI 点阵 | 2D 离线链可用 |
+| [`src/hl3/pipeline/dic3d.py`](src/hl3/pipeline/dic3d.py) / [`src/hl3/stereo/`](src/hl3/stereo/) | 立体匹配、针孔三角化、合成 DLT 标定、U/V/W | **无畸变、无 Zhang、无曲面 3D 应变、无 3D CLI** |
+| [`src/hl3/uq/`](src/hl3/uq/) | 位移方差 → 应变标准差 | 重叠 subset 下预测约偏紧 1.8× |
+| [`src/hl3/io/hdf5_schema.py`](src/hl3/io/hdf5_schema.py) | `.hl3` 常量、读写器、校验器 | schema `1.0.0-draft.2`，未冻 1.0 |
+| [`src/hl3/cli/`](src/hl3/cli/) | `python -m hl3 doctor\|run\|validate` | `run` 写 `.npz`/`.npy`，不写 `.hl3` |
+| [`src/hl3/viz/`](src/hl3/viz/) | 无头 PNG/PPM（可选 matplotlib） | 不是交互查看器 |
+| [`src/hl3/fea/`](src/hl3/fea/) | 内存三角网格 DIC↔节点投影 | 无 VTK/Abaqus 文件 |
+| [`src/hl3/gui/`](src/hl3/gui/) | `PolygonAOI` JSON；viewer 仅依赖探测 | **未接 pipeline，不是桌面 GUI** |
+| [`src/hl3/capture/mock.py`](src/hl3/capture/mock.py) | 确定性合成平移采集 | CI 用，无真实相机 |
+| [`tests/test_env_guards.py`](tests/test_env_guards.py) / [`tests/test_legal_scan.py`](tests/test_legal_scan.py) | CPU-only CI 护栏与 L-2 关键词扫描 | 可用 |
 
-行数为 `wc -l`，测试数为 `pytest --collect-only` 实数，均对应当前提交。[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 `ubuntu-latest` 上跑同一条命令，并显式置空 `CUDA_VISIBLE_DEVICES`。
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 `ubuntu-latest` 上跑同一条命令，并显式置空 `CUDA_VISIBLE_DEVICES`。
 
 三条可直接复现的入口：
 
 ```bash
-PYTHONPATH=src python3 -m pytest -q tests src/tests               # 全部 232 个测试
-PYTHONPATH=src python3 -m hl3.io.hdf5_schema selftest             # HDF5 容器往返自检（未装 h5py 时打印跳过原因并正常退出）
-PYTHONPATH=src python3 -c "from hl3.stereo.calibrate import main; main()"   # 立体误差预算与退化研究，约 27 s
+PYTHONPATH=src python3 -m pytest -q tests src/tests
+PYTHONPATH=src python3 -m hl3 doctor --no-selftest
+PYTHONPATH=src python3 -m hl3 run --synthetic --frames 2 --size 48x48 --subset 17 --strain off --out /tmp/hl3.npz
 ```
 
 一个最小的相关器例子（`MockCapture` 的第 1 帧相对第 0 帧整体平移 `u = +2 px`、`v = +1 px`）：
@@ -94,13 +100,15 @@ print(result.u[ok].mean(), result.v[ok].mean())   # 2.0  1.0
 
 | 方向 | 现状 |
 |------|------|
-| 标定 | 只有基于已知三维靶点的**线性 DLT 反解**。Zhang 平面标定、棋盘/ChArUco 角点检测、LM 束调整、靶标非理想性参数、bootstrap 协方差 `Σ_cal` 全部未做 |
-| 镜头畸变 | 完全没有。Brown–Conrady / rational / thin-prism（规格 L1–L5）随真正的标定模块一起来；显微立体的非参数畸变场（L6）在拿到书面专利 clearance 意见前不进任何分支 |
-| 应变 | 应变算子、平滑窗口、应变不确定度传播都没有（schema 里已有对应字段与常量） |
-| 不确定度 | 已有匹配项（相关器参数协方差、三角化位置协方差）；标定项 `Σ_cal` 与端到端合成链未打通 |
-| 相关器 | 二阶形函数、可靠性引导传播（RG-DIC）、全局 FE-DIC、DVC、GPU / 多线程后端 |
-| IO | Zarr `.hl3z` 容器、`hl3` 命令行（`validate` / `diff` / `repack` / `convert`）、`spec/conformance/` 一致性样例集、外部独立读取器（schema 冻结条件之一） |
-| 产品层 | 命令总线、GUI、真实采集硬件对接、实时/在线测量 |
+| 标定 | 只有基于已知三维靶点的**线性 DLT 反解**。Zhang 平面标定、棋盘/ChArUco 角点检测、LM 束调整、靶标非理想性、bootstrap 协方差 `Σ_cal` 全部未做 |
+| 镜头畸变 | 完全没有。Brown–Conrady / rational / thin-prism 随真正的标定模块一起来；显微立体的非参数畸变场在拿到书面专利 clearance 意见前不进任何分支 |
+| 3D 应变 | 立体链只给形貌与 `U/V/W`，**没有曲面 3D 应变** |
+| 不确定度 | 匹配项与应变传播已有；重叠 POI 空间相关未建模；标定项 `Σ_cal` 未打通；不得把当前 CI 当验收区间 |
+| 相关器产品接线 | 二阶形函数内核已有，2D pipeline / 立体 matcher 拒绝 `shape_order=2`；无 RG-DIC、无 partial subset、无全局 FE-DIC、无 DVC |
+| IO | `hl3 run` 不写完整 `.hl3`；无 CSV/STL/MATLAB 导出；schema 未冻 1.0；无外部独立读取器 |
+| 产品层 | 无真实采集、无实时、无交互查看器、无报告模板、无 FFT/ODS、无多相机拼接。`hl3.gui` 只是 AOI 侧车 + 依赖探针 |
+
+功能差距的逐项对照（36+ 行，对 VIC-2D 8 / VIC-3D 11 / MatchID / OpenCorr / GOM / Eiko / DICe）见 [`.agent_workspace/s1s4/IR4_USER_SUMMARY.md`](.agent_workspace/s1s4/IR4_USER_SUMMARY.md) 与 [`IR4_F3_actual_gap_matrix.md`](.agent_workspace/s1s4/IR4_F3_actual_gap_matrix.md)。
 
 ## 文档
 
@@ -112,6 +120,7 @@ print(result.u[ok].mean(), result.v[ok].mean())   # 2.0  1.0
 | [`.agent_workspace/round2/R2-G1-license-adr.md`](.agent_workspace/round2/R2-G1-license-adr.md) | ADR-LIC-001：许可证与独立实现边界 |
 | [`.agent_workspace/round2/R2-F3-prd-surpass.md`](.agent_workspace/round2/R2-F3-prd-surpass.md) · [`R2-F1-sota-reconciliation.md`](.agent_workspace/round2/R2-F1-sota-reconciliation.md) | 统一 PRD 与具约束力的 SOTA 裁决（RUL-01..08） |
 | [`.agent_workspace/round1/`](.agent_workspace/round1/) · [`round2/`](.agent_workspace/round2/) · [`round3/`](.agent_workspace/round3/) | 各轮子代理的规格、审计与实现报告 |
+| [`.agent_workspace/s1s4/IR4_USER_SUMMARY.md`](.agent_workspace/s1s4/IR4_USER_SUMMARY.md) | S1–S4 代码审查 + 竞品功能对照（用户向） |
 | [`.agent_workspace/research/`](.agent_workspace/research/) | 竞品公开特性基线与开源 DIC 生态调研 |
 
 ## 许可证
