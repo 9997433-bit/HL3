@@ -38,3 +38,24 @@ P0 研究冻结与法务 → P1 共享内核（ICGN+应变+HDF5）→ P2 HL3-2D 
 | RUL-08 | 文档效力顺序：`LEGAL.md` → R2-F1 裁决 + ADR-LIC-001 → F2 Gate 表 → G2 协议 → O1/O2/O3 规格 → 其余；空间分辨率 L10%/L20% 双口径并报、对榜单用其官方口径 |
 
 **超越定义已冻结**（R2-F1 §2）：超越成立 ⇔ A 组精度平权 6 项全过 + B 组显著优势 ≥4/6（吞吐/实时/TTFR/跨平台/GPG 内建/FEA 闭环）+ C 组独有能力全过（可复现性/UQ 默认化/开放 schema），全部锚定公开数据与协议，附可复算证据包。
+
+## Round 3 冻结（R3-F3 最终统一计划）
+
+最终统一计划全文见 `round3/R3-F3-master-plan-final.md`（汇编性质，效力顺序按 RUL-08；推翻任何冻结项需新的书面 ADR 并在本文件留痕）。自本节合入起，以下 **FRZ-01…14** 冻结生效：
+
+| 编号 | 冻结项 | 权威出处 |
+|------|--------|----------|
+| FRZ-01 | 产品定义：HL3-2D / HL3-3D + 共享 `hl3-core`，对标 VIC-2D 8 / VIC-3D 11.4 公开能力面 | R3-F3 §1 |
+| FRZ-02 | 裁决体系 RUL-01…08 整体具约束力 | `round2/R2-F1-sota-reconciliation.md` |
+| FRZ-03 | 许可证三层：Apache-2.0 内核 + CC-BY-4.0 schema 文档 + `LicenseRef-HL3-Commercial` GUI；OpenCorr 零复用、GPU 闭源库永久禁用 | RUL-01；ADR-LIC-001 |
+| FRZ-04 | CPU float64 参考实现 = 计量规范；GPU parity 双档（≤1e-4 px 合入门 / ≤1e-6 px 计量门） | RUL-02/08 |
+| FRZ-05 | 吞吐唯一口径 = R1-G2 §7 协议 + 冻结目标表；2D/3D 点分账；同机四条件前禁比较宣称 | RUL-03 |
+| FRZ-06 | 显微镜/SEM 畸变零实现直至书面 FTO；检索清单为唯一工程交付 | RUL-04；ADR-LIC-001 §5 |
+| FRZ-07 | 求解器分期：v1 仅 LOCAL；GLOBAL_FE = v1.x 官方 beta；ALDIC = v2；接口与 schema 槽位随 v1 冻结 | RUL-05 |
+| FRZ-08 | 超越判定公式 A 6/6 + B ≥4/6 + C 3/3 + 可复算证据包；禁止宣称清单 | R2-F1 §2 |
+| FRZ-09 | 文档效力顺序（LEGAL → R2-F1+ADR → F2 Gate → G2 协议 → O1/O2/O3 → 其余） | RUL-08 |
+| FRZ-10 | HDF5 schema `1.0.0-draft.2` 为冻结草案；1.0 冻结前置 = 首次跑通 Challenge 数据 | R2-O3；R2-F1 §4 G6 |
+| FRZ-11 | 验收框架：E 系列硬门 + L 系列 fail-closed 扫描 + A/B 双轴分离打分；诚实末态 A ≈ 4、B ≈ 2.5 | R2-F4 |
+| FRZ-12 | 残余差距台账 GAP-1…6 与移交清单 G1…G10 必须随任何对外"超越"表述附带 | R2-F4 §4；R2-F1 §4 |
+| FRZ-13 | 法律红线全集：禁破解/逆向；独立实现；VIC UI 仅用户侧持证走查；L10%/L20% 双口径 | `LEGAL.md`；RUL-06/08 |
+| FRZ-14 | 路线图 P0–P9 阶段门与 v1/v1.x/v2 版本切分及测量链补齐顺序 | R3-F3 §6；R1-F4；RUL-05 |
