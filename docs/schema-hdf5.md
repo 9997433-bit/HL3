@@ -1,11 +1,14 @@
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
 # HL3 数据格式规范（HDF5 容器）
 
-**规范版本**：`hl3-schema 1.0.0-draft`
+**规范版本**：`hl3-schema 1.0.0-draft.2`
 **容器**：HDF5 1.10+（`.hl3`）／Zarr v3（`.hl3z`，见附录 C）
-**授权**：本规范文档以 CC-BY-4.0 发布，独立于内核代码许可证。任何人可自由实现读写器。
+**授权**：本规范文档以 CC-BY-4.0 发布（ADR-LIC-001），独立于内核代码的 Apache-2.0 许可证。任何人可自由实现读写器。
 **状态**：草案。冻结条件见第 12 节。
+**参考实现**：`src/hl3/io/hdf5_schema.py`（见第 13 节）
 
-> 起草：Round 1 子代理 R1-O3。本规范为原创设计，基于 HDF5、OpenCV 相机模型约定、VTK/Exodus 数据模型与 iDICs 公开良好实践，**不含任何来自专有软件的逆向内容**。
+> 起草：Round 1 子代理 R1-O3；Round 2 由 R2-O3 修订至 `-draft.2`（修订记录见第 14 节，均为澄清与补充，无语义反转）。本规范为原创设计，基于 HDF5、OpenCV 相机模型约定、VTK/Exodus 数据模型与 iDICs 公开良好实践，**不含任何来自专有软件的逆向内容**。
 
 ---
 
@@ -73,18 +76,27 @@ HL3-2D（单相机平面 DIC）与 HL3-3D（立体/多目 DIC）共用同一个�
 
 所有 `*_hash` 与 `hashes` 使用 **BLAKE3-256**。属性形式为 64 位十六进制小写字符串；数据集形式为 `(n, 32) u8`。`@hash_algo` 必须写明（预留将来替换）。
 
+`@hash_algo` 的合法取值：
+
+| 取值 | 何时使用 |
+|------|----------|
+| `blake3-256` | 规范算法。写入器**应当**优先使用 |
+| `blake2b-256` | 环境中没有 BLAKE3 实现时的降级值。BLAKE3 不在任何语言的标准库里，硬性要求它会让「零依赖参考读取器」这一目标落空 |
+
+降级**必须**如实写进 `@hash_algo`，**不得**用 BLAKE3 的名义写 blake2b 摘要。跨文件比对哈希前，读取器必须先比对 `@hash_algo`；算法不同则哈希不可比，应报告为「无法校验」而不是「不匹配」。
+
 ---
 
 ## 3. 根组
 
 ```
 /
-  @hl3_schema_version : str   必须  "1.0.0"，语义化版本
+  @hl3_schema_version : str   必须  语义化版本；冻结前为 "1.0.0-draft.N"，冻结后为 "1.0.0"
   @hl3_writer         : str   必须  "hl3-kernel 0.4.2 (git:9f1c2ab)"
-  @uuid               : str   必须  RFC 4122 UUIDv4
+  @uuid               : str   必须  RFC 4122 UUID；应当为 v4，确定性写入器可以用 v5（见 §14 A-3）
   @created_utc        : str   必须
   @modified_utc       : str   必须
-  @hash_algo          : str   必须  "blake3-256"
+  @hash_algo          : str   必须  "blake3-256" | "blake2b-256"，见 §2.5
   @metrology_certified: u8    可选  1 = 全程计量模式产出
   @generator_platform : str   应当  "linux-x86_64 / gcc-14"
 ```
@@ -510,6 +522,51 @@ hl3 repack file.hl3 --layout point_major   # 重排分块以适配时程分析
 
 ---
 
+## 13. 参考实现映射
+
+本规范是散文，`src/hl3/io/hdf5_schema.py` 是它的**机器可读镜像**。散文与常量任何一处改动都必须同步改另一处，`tests/test_hdf5_schema.py` 做交叉断言。
+
+| 规范条款 | 参考实现符号 |
+|----------|--------------|
+| §3 根属性 | `A_SCHEMA_VERSION` … `A_HASH_ALGO`、`ROOT_REQUIRED_ATTRS` |
+| §3 顶层组 | `G_PROJECT` … `G_THUMBNAILS`、`TOP_LEVEL_GROUPS` |
+| §4–§10 子组/数据集名 | `SG_*`（组）、`DS_*`（数据集）常量 |
+| §4.1 / §5 / §6.1 / §9 枚举 | `COORD_SYSTEM_KINDS`、`CAMERA_ROLES`、`DISTORTION_MODELS`、`ANALYSIS_TYPES`、`STRAIN_TENSORS`、`UQ_METHODS` … |
+| §6.1 `dist` 长度 | `DISTORTION_PARAM_COUNT` |
+| §9.1 `Np` | `SHAPE_PARAM_COUNT`、`shape_param_count()` |
+| §9.2 `@space` | `A_SPACE`、`SPACE_VALUES` |
+| §9.3 `@vsg_px` | `vsg_size_px(window_pts, step_px, subset_px)` |
+| §9.5 flags 位域 | `FieldFlags`、`ASSIGNED_FLAG_MASK`、`RESERVED_FLAG_MASK`、`PLUGIN_FLAG_MASK` |
+| §9.5 有效性判据 | `valid_mask(flags)`、`describe_flags(value)` |
+| §11.2 条 1 主版本拒绝 | `SUPPORTED_MAJOR`，`read_analysis` 与 `validate_file` 均执行 |
+| §12 `hl3 validate` | `validate_file(path, strict=False)` |
+| §2.5 哈希 | `content_hash()`、`config_hash()` |
+| 附录 A 分块 | `default_chunks(shape, kind)` |
+| 附录 B 规范化 JSON | `canonical_json(obj)` |
+| §12 一致性样例生成 | `SyntheticSpec`、`write_synthetic_hl3()` |
+| 附录 D 最小读取 | `read_analysis()` → `AnalysisData` |
+
+### 13.1 依赖分层
+
+常量、位域、路径助手、规范化 JSON 与哈希**只依赖标准库**：没有 h5py、甚至没有 numpy，`import hl3.io.hdf5_schema` 也必须成功。只有三个真正碰文件的入口需要 h5py，缺失时抛 `Hdf5Unavailable`，并由 `skip_reason()` 给出人话原因供 CI 跳过。
+
+理由与 P1 一致：**schema 的定义本身不应该有安装门槛**。要求第三方先装齐二进制依赖才能查到「flags 的 bit 6 是什么」，等于把公开格式又关回去一半。
+
+### 13.2 合成一致性算例
+
+`write_synthetic_hl3()` 生成 §12 表中「2D 完整（单相机 + 未标定 px 单位 + 应变 + UQ）」用例。位移场为均匀单轴拉伸叠加刚体平移：
+
+```
+u(x, y, f) = tx·f + ε·f·(x − x₀)
+v(x, y, f) = ty·f − ν·ε·f·(y − y₀)
+```
+
+于是 `exx = ε·f`、`eyy = −ν·ε·f`、`exy = 0` 逐点精确成立。**位移与应变都有闭式解**，所以往返读写可以逐位断言，不需要任何外部数据集，也不需要相关器参与 —— 这条 IO 回归链与 R2-O1 的 ICGN 内核完全解耦。
+
+该文件位移单位写 `"px"`：合成算例没有标定，就不假借 1 px = 1 mm（§9.2）。
+
+---
+
 ## 附录 A：默认分块与压缩
 
 | 数据集 | 分块 | 压缩 | 理由 |
@@ -524,6 +581,17 @@ hl3 repack file.hl3 --layout point_major   # 重排分块以适配时程分析
 
 写入器**应当**在每个数据集上写 `@chunk`（实际分块）与 `@compression`（如 `"zstd:3+shuffle"`）。
 根组**可以**写 `@layout_hint = "frame_major" | "point_major"` 供工具决定是否重排。
+
+### A.1 压缩器降级（规范性）
+
+zstd 在 HDF5 里是**注册过滤器（filter id 32015）而非内置过滤器**：没装 `hdf5plugin`（或等效的 HDF5 插件目录）的读取器打不开 zstd 压缩的数据集。因此：
+
+1. 上表的 zstd 是**默认值而非硬性要求**。写入器**可以**降级到 HDF5 内置的 gzip 或不压缩。
+2. 无论用哪种，`@compression` **必须**如实写明实际编码（`"zstd:3+shuffle"` / `"gzip:4+shuffle"` / `"none"`）。读取器靠这个属性判断自己能不能解，而不是靠猜。
+3. 面向公开分发的一致性样例（`spec/conformance/`）**应当**只用内置过滤器，保证任何一个原装 h5py 都能读 —— 「第三方不依赖 HL3 软件也能读」如果还要求先装对插件，就不成立了。
+4. 元素数很少的数据集**可以**不分块、不压缩：HDF5 的分块与过滤器元数据开销会超过收益。
+
+同理，`@hash_algo` 的降级规则见 §2.5。**一切降级都写进文件，不写进口头约定。**
 
 ## 附录 B：`config` JSON 规范化
 
@@ -576,3 +644,26 @@ with h5py.File("bending.hl3", "r") as f:
 ```
 
 约 20 行读出全部关键结果，且单位与有效性判据都从文件本身取得 —— 这就是 P1 与 P2 的实际含义。
+
+`hl3.io.hdf5_schema` 把这段示例里的魔数换成了具名常量，但**不取代它**：附录 D 必须永远可以脱离 HL3 代码库单独粘贴运行，这是「格式公开」的最后一道保险。
+
+---
+
+## 14. 修订记录
+
+`1.0.0-draft` → `1.0.0-draft.2`（Round 2 / R2-O3）。以下修订**全部是澄清与补充，没有一条反转 R1 的语义决定**；`flags` 位分配、路径树、必填/应当级别、坐标与单位约定一律未动。
+
+| # | 条款 | 修订 | 起因 |
+|---|------|------|------|
+| A-1 | §3 `@hl3_schema_version` | 原文写「必须 `"1.0.0"`」，与文首「版本 `1.0.0-draft`」及 §12.1「冻结前一律 `1.0.0-draft.N`」自相矛盾。改为：冻结前 `"1.0.0-draft.N"`，冻结后 `"1.0.0"` | 内部不一致；照原文写文件会让 §12.1 立即失效 |
+| A-2 | §2.5、§3 `@hash_algo` | 增列 `blake2b-256` 为合法降级值，并规定算法不同的哈希「不可比」而非「不匹配」 | BLAKE3 不在任何语言标准库内；硬性要求会让零依赖参考读取器无法实现 |
+| A-3 | §3 `@uuid` | 由「必须 UUIDv4」放宽为「RFC 4122 UUID，应当 v4，确定性写入器可用 v5」 | 逐位可复现（铁律 L4）与随机 v4 直接冲突：同输入两次运行会得到不同 `@uuid`。一致性样例必须可逐位比对 |
+| A-4 | 附录 A.1（新增） | zstd 由硬性默认改为「默认值，可降级为 gzip 或不压缩，但 `@compression` 必须如实写明」；一致性样例应当只用内置过滤器 | zstd 是 HDF5 注册过滤器不是内置过滤器，原装 h5py 打不开；不修正则 §12 样例集事实上不可读 |
+| A-5 | §13（新增） | 规范条款 ↔ 参考实现符号的映射表、依赖分层说明、合成算例定义 | R1 承诺了「参考实现 + 一致性套件」，Round 2 把它落到具体符号上，避免散文与代码各自漂移 |
+| A-6 | 文首、附录 D | 补 `SPDX-License-Identifier: CC-BY-4.0`；声明参考实现不取代附录 D 的独立可运行示例 | ADR-LIC-001 执行规则 1 |
+
+**仍然悬空、交给 Round 3 的条款**（本轮未擅自定稿）：
+
+1. §6 标定组、§7 内嵌图像、§8.1 模拟量通道、`/derived`、`/thumbnails` 只有散文与常量，尚无参考写入器覆盖 —— 一致性样例目前只覆盖 2D 完整用例一条。
+2. 附录 C 的 Zarr v3 映射尚无实现，`hl3 convert` 的无损往返未验证。
+3. §12.1 的四条冻结条件一条都未满足（尤其是「至少一个外部独立读取器」与 iDICs Challenge 跑通），因此**不得**去掉 `-draft` 后缀。
