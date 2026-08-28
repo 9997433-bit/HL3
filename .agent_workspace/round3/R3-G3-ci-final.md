@@ -7,4 +7,4 @@ ACTUAL_MODEL_SLUG: gpt-5.6-sol-xhigh-fast
 - CI installs `numpy`, `pytest`, and optional HDF5 support via `h5py`.
 - Existing `test`, `hdf5`, and `hash` optional dependency groups remain unchanged.
 
-Validation command: `python -m pytest -q tests src/tests`
+Validation: `python3 -m pytest -q tests src/tests` — 87 passed.
