@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """HL3 HDF5 容器 schema：常量、位域与参考读写器。
 
 本模块是 ``docs/schema-hdf5.md``（规范版本 ``1.0.0-draft.2``）的**机器可读镜像**。
@@ -31,33 +32,39 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
-    "SCHEMA_VERSION",
+    "HAS_H5PY",
+    "INVALID_FLAG_MASK",
+    "PLUGIN_FLAG_MASK",
+    "RESERVED_FLAG_MASK",
     "SCHEMA_MAJOR",
     "SCHEMA_MINOR",
+    "SCHEMA_VERSION",
     "WRITER_ID",
+    "AnalysisData",
     "FieldFlags",
-    "INVALID_FLAG_MASK",
-    "RESERVED_FLAG_MASK",
-    "PLUGIN_FLAG_MASK",
-    "valid_mask",
-    "has_reserved_flag_bits",
-    "vsg_size_px",
-    "canonical_json",
-    "content_hash",
+    "Hdf5Unavailable",
+    "SyntheticSpec",
     "analysis_path",
+    "camera_path",
+    "canonical_json",
+    "config_hash",
+    "content_hash",
+    "default_chunks",
+    "describe_flags",
     "fields_path",
     "grid_path",
-    "strain_path",
-    "camera_path",
-    "sequence_path",
-    "SyntheticSpec",
-    "AnalysisData",
-    "write_synthetic_hl3",
+    "has_reserved_flag_bits",
     "read_analysis",
-    "validate_file",
-    "Hdf5Unavailable",
-    "HAS_H5PY",
+    "sequence_path",
+    "shape_param_count",
     "skip_reason",
+    "strain_path",
+    "synthetic_fields",
+    "utc_now",
+    "valid_mask",
+    "validate_file",
+    "vsg_size_px",
+    "write_synthetic_hl3",
 ]
 
 # --------------------------------------------------------------------------------------
@@ -458,7 +465,7 @@ def diagnostics_path(ana_id: str) -> str:
 def _canon_float(x: float) -> str:
     if math.isnan(x) or math.isinf(x):
         raise ValueError("规范化 JSON 不允许 NaN/Inf；请改用字符串哨兵或省略该键")
-    return "%.17g" % x
+    return f"{x:.17g}"
 
 
 def canonical_json(obj: Any) -> str:
@@ -1004,7 +1011,7 @@ def read_analysis(
         if G_ANALYSES not in f:
             raise KeyError("文件不含 /analyses 组")
         if analysis_id is None:
-            analysis_id = sorted(f[G_ANALYSES].keys())[0]
+            analysis_id = min(f[G_ANALYSES].keys())
         ana = f[f"{G_ANALYSES}/{analysis_id}"]
 
         ana_type = str(ana.attrs["type"])

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """HL3 I/O layer: container schemas, readers, writers and exporters.
 
 The only module frozen in Round 2 is :mod:`hl3.io.hdf5_schema`, which holds the
