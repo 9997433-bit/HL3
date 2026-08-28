@@ -485,5 +485,85 @@
       }
     },
     "scope_note": "S1 is not closed: A4 was not measurable, the schema remains a draft, and A1 lacks the required Challenge dataset even though the three-seed synthetic diagnostic is below its numeric limit."
+  },
+  "s2": {
+    "schema": "hl3.metrology.s2.v1",
+    "recorded_date_utc": "2026-08-28",
+    "status": "not-evaluated",
+    "exit_gate_pass": false,
+    "execution": {
+      "device": "cpu",
+      "gpu_used": false,
+      "cuda_visible_devices": "",
+      "tested_source_revision": "42d04327c3840c63b6be6e8d0961686bc567094c"
+    },
+    "module_availability": {
+      "hl3.stereo.calibrate": true,
+      "hl3.stereo.triangulate": true,
+      "hl3.stereo.match": false,
+      "hl3.pipeline.dic3d": false
+    },
+    "test_suite": {
+      "command": "CUDA_VISIBLE_DEVICES='' python3 -m pytest tests/test_s2_s3_smoke.py -q -rs",
+      "status": "skipped",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 2,
+      "combined_s2_s3_wall_time_seconds": 0.614
+    },
+    "gates": {
+      "a5_stereo_3d_accuracy": {
+        "status": "not-evaluated",
+        "reason": "hl3.stereo.match and hl3.pipeline.dic3d are not implemented in this checkout."
+      },
+      "a6_calibration_accuracy": {
+        "status": "not-evaluated",
+        "reason": "No Impl-R2 calibration metrology test is present in this checkout."
+      },
+      "a4_3d_strain_noise_floor": {
+        "status": "not-evaluated",
+        "reason": "The S2 3D pipeline and curved-surface strain measurement are unavailable."
+      }
+    },
+    "scope_note": "The pre-existing calibration and triangulation modules are importable, but the Impl-R2 stereo matching and 3D pipeline surfaces are absent; no S2 performance value is claimed."
+  },
+  "s3": {
+    "schema": "hl3.metrology.s3.v1",
+    "recorded_date_utc": "2026-08-28",
+    "status": "not-evaluated",
+    "exit_gate_pass": false,
+    "execution": {
+      "device": "cpu",
+      "gpu_used": false,
+      "cuda_visible_devices": "",
+      "tested_source_revision": "42d04327c3840c63b6be6e8d0961686bc567094c"
+    },
+    "module_availability": {
+      "hl3.uq": false,
+      "hl3.cli.validate": false
+    },
+    "test_suite": {
+      "command": "CUDA_VISIBLE_DEVICES='' python3 -m pytest tests/test_s2_s3_smoke.py -q -rs",
+      "status": "skipped",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 2,
+      "combined_s2_s3_wall_time_seconds": 0.614
+    },
+    "gates": {
+      "c1_deterministic_reproduction": {
+        "status": "not-evaluated",
+        "reason": "No S3 deterministic cross-run metrology test is present."
+      },
+      "c2_uncertainty_propagation": {
+        "status": "not-evaluated",
+        "reason": "hl3.uq is not implemented in this checkout."
+      },
+      "c3_schema_validation": {
+        "status": "not-evaluated",
+        "reason": "hl3.cli.validate is not implemented in this checkout."
+      }
+    },
+    "scope_note": "All targeted S3 package surfaces were skipped as unavailable; no reproducibility, uncertainty, coverage, or validation result is claimed."
   }
 }
