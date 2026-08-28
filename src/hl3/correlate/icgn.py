@@ -19,6 +19,14 @@ Design choices, all taken from the Round 1 spec:
   derivative of the interpolant -- mixing the two breaks the IC-GN
   consistency argument.
 
+Degenerate inputs are answered with a status code, never with a plausible
+looking number: a subset whose contrast is round-off rather than texture, a
+subset whose gradients only span one direction, a point whose integer search
+window leaves the image, and an empty AOI are all defined cases (spec §2.6
+failure table). Non-finite pixels are rejected at the API boundary instead --
+the B-spline prefilter is an IIR recursion, so a single NaN would silently
+poison a whole row and column of coefficients.
+
 Only NumPy is required. No GPU, no external DIC code.
 """
 
@@ -44,9 +52,22 @@ __all__ = [
     "icgn_first_order",
 ]
 
+# A zero-mean subset norm below this fraction of the subset's own RMS grey
+# level is floating-point residue from resampling a constant patch, not
+# texture. Double-precision resampling leaves ~1e-14 relative; real speckle
+# sits at ~1e-1 relative, so five orders of headroom either way.
+_CONTRAST_REL_EPS = 1e-9
+
 
 class Status(enum.IntEnum):
-    """Per-point outcome. Mirrors ``hl3::corr2d::Status`` in the 2D spec."""
+    """Per-point outcome. Mirrors ``hl3::corr2d::Status`` in the 2D spec.
+
+    The *values* here are normative: R1-O1 §4.3 declares the C++ enum in a
+    different order (``NO_INITIAL_GUESS`` before ``DIVERGED``), so that
+    declaration needs explicit initialisers to agree with these numbers. The
+    numbering below is the one already published in R2-O1 §2.7 and is kept
+    stable; see the Round 3 report for the reconciliation note.
+    """
 
     UNCOMPUTED = 0
     CONVERGED = 1
@@ -55,6 +76,8 @@ class Status(enum.IntEnum):
     OUT_OF_BOUNDS = 4
     SINGULAR_HESSIAN = 5
     DIVERGED = 6
+    NO_INITIAL_GUESS = 7
+    MASKED = 8
 
 
 @dataclass(frozen=True)
@@ -71,6 +94,8 @@ class ICGNParams:
     search_radius: int = 0  # FFT-CC integer search half-width; 0 disables
     compute_covariance: bool = False
     image_noise_sigma: float = 0.0  # grey levels, for the covariance estimate
+    min_contrast: float = 1e-9  # grey levels RMS, absolute floor for flat subsets
+    max_hessian_cond: float = 1e10  # spec §2.6: cond(H) above this is singular
 
     def __post_init__(self) -> None:
         if self.subset_radius < 2:
@@ -81,6 +106,20 @@ class ICGNParams:
             raise ValueError("max_iter must be >= 1")
         if self.search_radius < 0:
             raise ValueError("search_radius must be >= 0")
+        if not math.isfinite(self.conv_tol) or self.conv_tol <= 0.0:
+            raise ValueError("conv_tol must be finite and > 0")
+        if not -1.0 <= self.zncc_min <= 1.0:
+            raise ValueError("zncc_min must lie in [-1, 1]")
+        if not math.isfinite(self.max_disp) or self.max_disp <= 0.0:
+            raise ValueError("max_disp must be finite and > 0")
+        if not math.isfinite(self.hessian_reg) or self.hessian_reg < 0.0:
+            raise ValueError("hessian_reg must be finite and >= 0")
+        if not math.isfinite(self.image_noise_sigma) or self.image_noise_sigma < 0.0:
+            raise ValueError("image_noise_sigma must be finite and >= 0")
+        if not math.isfinite(self.min_contrast) or self.min_contrast < 0.0:
+            raise ValueError("min_contrast must be finite and >= 0")
+        if self.max_hessian_cond <= 1.0:
+            raise ValueError("max_hessian_cond must be > 1")
 
     @property
     def subset_size(self) -> int:
@@ -112,11 +151,63 @@ class ICGNResult:
         """Points that converged and cleared the ZNCC threshold."""
         return self.status == int(Status.CONVERGED)
 
+    @property
+    def n_points(self) -> int:
+        return int(self.p.shape[0])
+
     def masked(self, field_name: str) -> np.ndarray:
         """A copy of ``field_name`` with non-converged points set to NaN."""
+        if field_name not in _MASKABLE_FIELDS:
+            raise ValueError(
+                f"cannot mask {field_name!r}; expected one of "
+                + ", ".join(sorted(_MASKABLE_FIELDS))
+            )
         values = np.asarray(getattr(self, field_name), dtype=np.float64).copy()
         values[~self.valid] = np.nan
         return values
+
+    def status_counts(self) -> dict[Status, int]:
+        """Histogram of outcomes, for the per-point diagnostics of spec §1.5."""
+        return {
+            status: int(np.count_nonzero(self.status == int(status)))
+            for status in Status
+            if np.any(self.status == int(status))
+        }
+
+
+_MASKABLE_FIELDS = frozenset({"x", "y", "p", "u", "v", "zncc", "iterations"})
+
+
+# --------------------------------------------------------------------------
+# Input validation
+# --------------------------------------------------------------------------
+
+
+def _as_image(image: np.ndarray, name: str) -> np.ndarray:
+    """Validate and convert a greyscale image to a finite ``float64`` array."""
+    array = np.asarray(image, dtype=np.float64)
+    if array.ndim != 2:
+        raise ValueError(f"{name} must be 2-D, got {array.ndim}-D")
+    if array.size == 0:
+        raise ValueError(f"{name} must be non-empty, got shape {array.shape}")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(
+            f"{name} contains non-finite pixels; the B-spline prefilter is an "
+            "IIR recursion and would spread them across whole rows/columns"
+        )
+    return array
+
+
+def _is_flat(norm: float, count: int, level: float, min_contrast: float) -> bool:
+    """True when a zero-mean subset norm is resampling residue, not texture.
+
+    ``level`` is the subset's own RMS grey level, so the test is invariant to
+    the affine grey change ``g = a f + b`` that ZNSSD is built to absorb --
+    an absolute threshold would wrongly flag a faint image and wrongly pass a
+    flat but bright one.
+    """
+    rms_contrast = norm / math.sqrt(count)
+    return rms_contrast <= max(min_contrast, _CONTRAST_REL_EPS * level)
 
 
 # --------------------------------------------------------------------------
@@ -179,9 +270,7 @@ class BSplineInterpolator:
     """
 
     def __init__(self, image: np.ndarray) -> None:
-        image = np.asarray(image, dtype=np.float64)
-        if image.ndim != 2:
-            raise ValueError("image must be 2-D")
+        image = _as_image(image, "image")
         self.height, self.width = image.shape
         coefficients = _prefilter_axis(image, axis=0)
         self.coefficients = _prefilter_axis(coefficients, axis=1)
@@ -190,8 +279,11 @@ class BSplineInterpolator:
         return self.sample(x, y)
 
     def sample(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        x = np.asarray(x, dtype=np.float64)
-        y = np.asarray(y, dtype=np.float64)
+        x, y = np.broadcast_arrays(
+            np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
+        )
+        if not (np.all(np.isfinite(x)) and np.all(np.isfinite(y))):
+            raise ValueError("sample coordinates must be finite")
         ix = np.floor(x).astype(np.int64)
         iy = np.floor(y).astype(np.int64)
         tx = x - ix
@@ -238,11 +330,10 @@ def reference_gradients(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """4th-order central-difference gradients ``(f_x, f_y)``.
 
     The two-pixel border falls back to 2nd-order central differences and then
-    to one-sided differences at the very edge.
+    to one-sided differences at the very edge. An axis of length 1 carries no
+    difference at all and yields exact zeros along that axis.
     """
-    image = np.asarray(image, dtype=np.float64)
-    if image.ndim != 2:
-        raise ValueError("image must be 2-D")
+    image = _as_image(image, "image")
 
     def diff_axis(axis: int) -> np.ndarray:
         arr = np.moveaxis(image, axis, 0)
@@ -279,11 +370,21 @@ def make_grid(
     plus two pixels of interpolation support, i.e. the smallest border for
     which every subset sample stays inside the image.
     """
-    height, width = shape
+    if len(tuple(shape)) != 2:
+        raise ValueError("shape must be (height, width)")
+    height, width = (int(value) for value in shape)
+    if height < 1 or width < 1:
+        raise ValueError(f"shape must be positive, got ({height}, {width})")
     if margin is None:
         margin = params.subset_radius + params.search_radius + 2
+    margin = int(margin)
+    if margin < 0:
+        raise ValueError("margin must be >= 0")
     if 2 * margin >= min(height, width):
-        raise ValueError("image too small for the requested subset/margin")
+        raise ValueError(
+            f"image too small for the requested subset/margin: {height}x{width} "
+            f"image needs more than {2 * margin} px for margin {margin}"
+        )
     xs = np.arange(margin, width - margin, params.step, dtype=np.float64)
     ys = np.arange(margin, height - margin, params.step, dtype=np.float64)
     grid_x, grid_y = np.meshgrid(xs, ys)
@@ -301,6 +402,7 @@ def integer_search_fftcc(
     point: tuple[float, float],
     radius: int,
     search_radius: int,
+    min_contrast: float = 1e-9,
 ) -> tuple[float, float, float]:
     """Integer-pixel ``(u, v, zncc)`` for one point by FFT cross-correlation.
 
@@ -308,9 +410,21 @@ def integer_search_fftcc(
     of the target; the local target mean and norm needed to turn the raw
     correlation into a true ZNCC come from summed-area tables, so the whole
     map costs ``O(M^2 log M)`` rather than ``O(M^2 N)``.
+
+    Returns ``(0.0, 0.0, -1.0)`` when no candidate is usable -- the window
+    leaves the image, or either patch is flat -- so a ``zncc`` of ``-1``
+    always means "no integer guess", never "guess of zero".
     """
-    reference = np.asarray(reference, dtype=np.float64)
-    target = np.asarray(target, dtype=np.float64)
+    reference = _as_image(reference, "reference")
+    target = _as_image(target, "target")
+    radius = int(radius)
+    search_radius = int(search_radius)
+    if radius < 1:
+        raise ValueError("radius must be >= 1")
+    if search_radius < 0:
+        raise ValueError("search_radius must be >= 0")
+    if not (math.isfinite(point[0]) and math.isfinite(point[1])):
+        raise ValueError("point must be finite")
     x0 = int(round(point[0]))
     y0 = int(round(point[1]))
     n = 2 * radius + 1
@@ -335,7 +449,8 @@ def integer_search_fftcc(
 
     zero_mean = subset - subset.mean()
     ref_norm = math.sqrt(float(np.sum(zero_mean * zero_mean)))
-    if ref_norm <= 0.0:
+    ref_level = math.sqrt(float(np.mean(subset * subset)))
+    if _is_flat(ref_norm, subset.size, ref_level, min_contrast):
         return 0.0, 0.0, -1.0
 
     spectrum = np.conj(np.fft.rfft2(zero_mean, s=(m, m))) * np.fft.rfft2(window)
@@ -350,17 +465,23 @@ def integer_search_fftcc(
     np.maximum(variance, 0.0, out=variance)
     window_norm = np.sqrt(variance)
 
+    # Same relative flatness test as the solver, applied per candidate: a
+    # window of constant grey has a norm made of round-off, and dividing by it
+    # would manufacture a correlation peak out of nothing.
+    flat = window_norm / math.sqrt(count) <= np.maximum(
+        min_contrast, _CONTRAST_REL_EPS * np.sqrt(sums_sq / count)
+    )
+
     with np.errstate(divide="ignore", invalid="ignore"):
         zncc_map = correlation / (ref_norm * window_norm)
-    zncc_map[~np.isfinite(zncc_map)] = -1.0
+    zncc_map[flat | ~np.isfinite(zncc_map)] = -1.0
 
     peak = int(np.argmax(zncc_map))
     dy, dx = np.unravel_index(peak, zncc_map.shape)
-    return (
-        float(dx - search_radius),
-        float(dy - search_radius),
-        float(zncc_map[dy, dx]),
-    )
+    best = float(zncc_map[dy, dx])
+    if best <= -1.0:
+        return 0.0, 0.0, -1.0
+    return float(dx - search_radius), float(dy - search_radius), best
 
 
 def _window_sums(image: np.ndarray, n: int) -> np.ndarray:
@@ -377,9 +498,18 @@ def _window_sums(image: np.ndarray, n: int) -> np.ndarray:
 # --------------------------------------------------------------------------
 
 
+def _as_warp_params(p: np.ndarray, name: str = "p") -> np.ndarray:
+    array = np.asarray(p, dtype=np.float64).reshape(-1)
+    if array.size != 6:
+        raise ValueError(f"{name} must have 6 elements, got {array.size}")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must be finite")
+    return array
+
+
 def warp_matrix(p: np.ndarray) -> np.ndarray:
     """Homogeneous 3x3 warp for ``p = (u, u_x, u_y, v, v_x, v_y)``."""
-    u, ux, uy, v, vx, vy = (float(value) for value in p)
+    u, ux, uy, v, vx, vy = _as_warp_params(p)
     return np.array(
         [
             [1.0 + ux, uy, u],
@@ -392,6 +522,9 @@ def warp_matrix(p: np.ndarray) -> np.ndarray:
 
 def warp_params(matrix: np.ndarray) -> np.ndarray:
     """Inverse of :func:`warp_matrix`."""
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if matrix.shape != (3, 3):
+        raise ValueError(f"matrix must be 3x3, got {matrix.shape}")
     return np.array(
         [
             matrix[0, 2],
@@ -406,12 +539,42 @@ def warp_params(matrix: np.ndarray) -> np.ndarray:
 
 
 def compose_inverse(p: np.ndarray, dp: np.ndarray) -> np.ndarray:
-    """The inverse-compositional update ``W(p) <- W(p) . W(dp)^-1``."""
-    increment = warp_matrix(dp)
-    determinant = increment[0, 0] * increment[1, 1] - increment[0, 1] * increment[1, 0]
-    if abs(determinant) < 1e-12:
+    """The inverse-compositional update ``W(p) <- W(p) . W(dp)^-1``.
+
+    The 2x2 affine block is inverted in closed form rather than through
+    :func:`numpy.linalg.inv`, and the singularity test is relative to the
+    block's magnitude, so a large-but-invertible increment is not rejected
+    while a tiny-but-singular one still is.
+    """
+    du, dux, duy, dv, dvx, dvy = _as_warp_params(dp, "dp")
+    u, ux, uy, v, vx, vy = _as_warp_params(p, "p")
+
+    a00, a01 = 1.0 + dux, duy
+    a10, a11 = dvx, 1.0 + dvy
+    determinant = a00 * a11 - a01 * a10
+    magnitude = max(abs(a00), abs(a01), abs(a10), abs(a11), 1.0)
+    if abs(determinant) <= 1e-12 * magnitude * magnitude:
         raise np.linalg.LinAlgError("degenerate warp increment")
-    return warp_params(warp_matrix(p) @ np.linalg.inv(increment))
+
+    # inv(A_dp) and inv(A_dp) @ (-t_dp)
+    i00, i01 = a11 / determinant, -a01 / determinant
+    i10, i11 = -a10 / determinant, a00 / determinant
+    tx = -(i00 * du + i01 * dv)
+    ty = -(i10 * du + i11 * dv)
+
+    b00, b01 = 1.0 + ux, uy
+    b10, b11 = vx, 1.0 + vy
+    return np.array(
+        [
+            b00 * tx + b01 * ty + u,
+            b00 * i00 + b01 * i10 - 1.0,
+            b00 * i01 + b01 * i11,
+            b10 * tx + b11 * ty + v,
+            b10 * i00 + b11 * i10,
+            b10 * i01 + b11 * i11 - 1.0,
+        ],
+        dtype=np.float64,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -441,21 +604,25 @@ def icgn_first_order(
         ``(n, 6)`` warp parameters, or ``(n, 2)`` displacements, used to seed
         the iteration. When omitted, the seed is the FFT-CC integer search if
         ``params.search_radius > 0`` and zero otherwise.
+
+    An empty ``points`` array is a valid AOI and returns empty result arrays
+    of the right shapes and dtypes rather than raising.
     """
     params = params or ICGNParams()
-    reference = np.asarray(reference, dtype=np.float64)
-    target = np.asarray(target, dtype=np.float64)
+    reference = _as_image(reference, "reference")
+    target = _as_image(target, "target")
     if reference.shape != target.shape:
-        raise ValueError("reference and target must have the same shape")
-    if reference.ndim != 2:
-        raise ValueError("images must be 2-D")
+        raise ValueError(
+            f"reference and target must have the same shape, got "
+            f"{reference.shape} and {target.shape}"
+        )
 
     if points is None:
         points = make_grid(reference.shape, params)
-    points = np.atleast_2d(np.asarray(points, dtype=np.float64))
-    if points.shape[1] != 2:
-        raise ValueError("points must be an (n, 2) array of (x, y)")
+    points = _as_points(points)
     n_points = points.shape[0]
+    if n_points == 0:
+        return _empty_result(params)
 
     radius = params.subset_radius
     offsets = np.arange(-radius, radius + 1, dtype=np.float64)
@@ -469,7 +636,7 @@ def icgn_first_order(
     gx_interp = BSplineInterpolator(grad_x)
     gy_interp = BSplineInterpolator(grad_y)
 
-    seeds = _resolve_initial_guess(
+    seeds, seed_ok = _resolve_initial_guess(
         reference, target, points, params, initial_guess, n_points
     )
 
@@ -499,11 +666,16 @@ def icgn_first_order(
             status_out[index] = int(Status.OUT_OF_BOUNDS)
             continue
 
+        if not seed_ok[index]:
+            status_out[index] = int(Status.NO_INITIAL_GUESS)
+            continue
+
         f = ref_interp.sample(sample_x, sample_y)
         f_mean = f.mean()
         f_centred = f - f_mean
         f_norm = math.sqrt(float(np.dot(f_centred, f_centred)))
-        if f_norm < 1e-9:
+        f_level = math.sqrt(float(np.dot(f, f)) / f.size)
+        if _is_flat(f_norm, f.size, f_level, params.min_contrast):
             status_out[index] = int(Status.SINGULAR_HESSIAN)
             continue
 
@@ -513,6 +685,16 @@ def icgn_first_order(
         jacobian = np.column_stack((fx, fx * dx, fx * dy, fy, fy * dx, fy * dy))
 
         hessian_raw = jacobian.T @ jacobian
+        # Conditioning is judged on the scaled Hessian (spec §2.6): the raw
+        # gradient columns differ by a factor of r between the displacement
+        # and the displacement-gradient terms, so cond(H_raw) measures the
+        # parameterisation as much as the subset. A subset textured in one
+        # direction only (stripes, a ramp) is genuinely rank-deficient and
+        # must be rejected rather than rescued by the diagonal loading.
+        if not _well_conditioned(hessian_raw, radius, params.max_hessian_cond):
+            status_out[index] = int(Status.SINGULAR_HESSIAN)
+            continue
+
         trace_scale = float(np.trace(hessian_raw)) / 6.0
         hessian_raw = hessian_raw + params.hessian_reg * trace_scale * np.eye(6)
         hessian = (2.0 / (f_norm * f_norm)) * hessian_raw
@@ -543,7 +725,8 @@ def icgn_first_order(
             g = tgt_interp.sample(warped_x, warped_y)
             g_centred = g - g.mean()
             g_norm = math.sqrt(float(np.dot(g_centred, g_centred)))
-            if g_norm < 1e-9:
+            g_level = math.sqrt(float(np.dot(g, g)) / g.size)
+            if _is_flat(g_norm, g.size, g_level, params.min_contrast):
                 status = int(Status.SINGULAR_HESSIAN)
                 break
 
@@ -584,13 +767,14 @@ def icgn_first_order(
                 g = tgt_interp.sample(warped_x, warped_y)
                 g_centred = g - g.mean()
                 g_norm = math.sqrt(float(np.dot(g_centred, g_centred)))
-                zncc = (
-                    float(np.dot(f_centred, g_centred) / (f_norm * g_norm))
-                    if g_norm > 1e-9
-                    else -1.0
-                )
-                if zncc < params.zncc_min:
-                    status = int(Status.LOW_ZNCC)
+                g_level = math.sqrt(float(np.dot(g, g)) / g.size)
+                if _is_flat(g_norm, g.size, g_level, params.min_contrast):
+                    status = int(Status.SINGULAR_HESSIAN)
+                    zncc = -1.0
+                else:
+                    zncc = float(np.dot(f_centred, g_centred) / (f_norm * g_norm))
+                    if zncc < params.zncc_min:
+                        status = int(Status.LOW_ZNCC)
 
         p_out[index] = p
         zncc_out[index] = zncc
@@ -626,6 +810,55 @@ def _cho_solve(cho: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     return np.linalg.solve(cho.T, forward)
 
 
+def _as_points(points: np.ndarray) -> np.ndarray:
+    """Validate a POI list, accepting an empty AOI in any of its spellings."""
+    array = np.asarray(points, dtype=np.float64)
+    if array.size == 0:
+        return np.zeros((0, 2), dtype=np.float64)
+    array = np.atleast_2d(array)
+    if array.ndim != 2 or array.shape[1] != 2:
+        raise ValueError(
+            f"points must be an (n, 2) array of (x, y), got shape {array.shape}"
+        )
+    if not np.all(np.isfinite(array)):
+        raise ValueError("points must be finite")
+    return array
+
+
+def _empty_result(params: ICGNParams) -> ICGNResult:
+    """Result for an empty AOI: right shapes, right dtypes, no points."""
+    return ICGNResult(
+        x=np.zeros(0, dtype=np.float64),
+        y=np.zeros(0, dtype=np.float64),
+        p=np.zeros((0, 6), dtype=np.float64),
+        zncc=np.zeros(0, dtype=np.float64),
+        iterations=np.zeros(0, dtype=np.int32),
+        status=np.zeros(0, dtype=np.int32),
+        covariance=(
+            np.zeros((0, 6, 6), dtype=np.float64)
+            if params.compute_covariance
+            else None
+        ),
+    )
+
+
+def _well_conditioned(hessian_raw: np.ndarray, radius: int, max_cond: float) -> bool:
+    """``cond(S H S) <= max_cond`` with ``S = diag(1, r, r, 1, r, r)``.
+
+    The scaling puts every parameter in "pixels of motion at the subset edge",
+    which is the same normalisation the convergence test uses, so the
+    condition number describes the subset rather than the units.
+    """
+    scale = np.array([1.0, radius, radius, 1.0, radius, radius], dtype=np.float64)
+    scaled = hessian_raw * scale[:, None] * scale[None, :]
+    eigenvalues = np.linalg.eigvalsh(scaled)
+    largest = float(eigenvalues[-1])
+    smallest = float(eigenvalues[0])
+    if not math.isfinite(largest) or largest <= 0.0:
+        return False
+    return smallest > 0.0 and largest / smallest <= max_cond
+
+
 def _resolve_initial_guess(
     reference: np.ndarray,
     target: np.ndarray,
@@ -633,8 +866,16 @@ def _resolve_initial_guess(
     params: ICGNParams,
     initial_guess: np.ndarray | None,
     n_points: int,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
+    """Seeds plus a per-point flag saying whether a seed could be produced.
+
+    A requested FFT-CC search that cannot run -- window off the image, flat
+    patch -- yields ``False``: seeding such a point at zero would hand back a
+    confident answer to a question that was never asked (``NO_INITIAL_GUESS``
+    in the spec §2.6 failure table).
+    """
     seeds = np.zeros((n_points, 6), dtype=np.float64)
+    seed_ok = np.ones(n_points, dtype=bool)
     if initial_guess is not None:
         guess = np.atleast_2d(np.asarray(initial_guess, dtype=np.float64))
         if guess.shape[0] == 1 and n_points > 1:
@@ -645,18 +886,27 @@ def _resolve_initial_guess(
             seeds[:, 0] = guess[:, 0]
             seeds[:, 3] = guess[:, 1]
         else:
-            raise ValueError("initial_guess must have shape (n, 2) or (n, 6)")
-        return seeds
+            raise ValueError(
+                f"initial_guess must have shape ({n_points}, 2) or "
+                f"({n_points}, 6), got {guess.shape}"
+            )
+        if not np.all(np.isfinite(seeds)):
+            raise ValueError("initial_guess must be finite")
+        return seeds, seed_ok
 
     if params.search_radius > 0:
         for index in range(n_points):
-            u0, v0, _ = integer_search_fftcc(
+            u0, v0, zncc = integer_search_fftcc(
                 reference,
                 target,
                 (points[index, 0], points[index, 1]),
                 params.subset_radius,
                 params.search_radius,
+                params.min_contrast,
             )
+            if zncc <= -1.0:
+                seed_ok[index] = False
+                continue
             seeds[index, 0] = u0
             seeds[index, 3] = v0
-    return seeds
+    return seeds, seed_ok
