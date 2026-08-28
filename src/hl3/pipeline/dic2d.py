@@ -917,6 +917,7 @@ def _strain_one(
         "step": config.step,
         "step_px": float(config.step),
         "subset_size": config.subset_size,
+        "subset_px": config.subset_size,
         "grid_shape": grid_shape,
     }
 

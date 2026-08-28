@@ -857,6 +857,30 @@ def test_strain_field_rejects_unknown_names():
         run.strain_field("E_zz")
 
 
+def test_the_merged_strain_module_closes_the_chain():
+    """Correlation to strain in one call, once hl3.strain exposes an entry point.
+
+    Skipped rather than xfailed while the strain module is still landing: an
+    absent chain is covered by the downgrade tests above, and this one is about
+    the chain actually being wired.
+    """
+    strain = pytest.importorskip("hl3.strain")
+    if not hasattr(strain, "compute_strain"):
+        pytest.skip("hl3.strain does not expose compute_strain yet")
+
+    config = Dic2DConfig(icgn=ICGNParams(subset_radius=8, step=10), margin=20)
+    run = run_sequence(mock_frames(3), config)
+
+    assert run.strain.available is True, run.strain.reason
+    assert run.strain.backend == "hl3.strain.compute_strain"
+    assert run.strain.names
+    for name in run.strain.names:
+        field = run.strain_field(name)
+        assert field.shape[0] == run.n_frames
+        # MockCapture translates rigidly, so every strain component vanishes.
+        assert float(np.nanmax(np.abs(field))) < 1e-4, name
+
+
 def test_the_real_strain_module_is_used_when_it_is_importable():
     """Whatever hl3.strain currently is, the pipeline's verdict must be honest."""
     backend, name, reason = resolve_strain_backend()
