@@ -337,6 +337,64 @@ def test_gate_flags_a_miscalibrated_rig(images, rig, params):
     assert float(np.nanmedian(result.sampson_px)) > params.max_sampson_px
 
 
+def test_the_gate_only_sees_the_cross_epipolar_half_of_the_error(rig, frame, matched):
+    """A good Sampson score is not the same thing as a good match.
+
+    The epipolar constraint says nothing about where along its line a point
+    sits, and that is the direction depth is read from. The measured error
+    splits accordingly, and the Sampson residual tracks the small half. This
+    is the reason the module keeps ZNCC, status and the residuals as separate
+    fields instead of collapsing them into one score.
+    """
+    keep = matched.accepted
+    left = matched.left_xy[keep]
+    _, truth = _truth(rig, frame, left)
+    F = rig_fundamental(rig)
+    lines = np.hstack([left, np.ones((left.shape[0], 1))]) @ F.T
+    across = lines[:, :2] / np.hypot(lines[:, 0], lines[:, 1])[:, None]
+    along = np.column_stack([-across[:, 1], across[:, 0]])
+
+    error = matched.right_xy[keep] - truth
+    rms_across = float(np.sqrt(np.mean(((error * across).sum(axis=1)) ** 2)))
+    rms_along = float(np.sqrt(np.mean(((error * along).sum(axis=1)) ** 2)))
+    assert rms_along > 4.0 * rms_across
+    assert float(np.sqrt(np.mean(matched.sampson_px[keep] ** 2))) < rms_along
+
+
+def test_a_baseline_error_passes_the_gate_and_still_ruins_the_depth(
+    images, rig, frame, params, matched
+):
+    """The geometric gate is not a calibration check, and must not be sold as one.
+
+    Stretching the baseline by 8 % barely moves the epipolar residual -- the
+    epipolar lines are almost where they were -- so every point sails through
+    the gate while the triangulated surface is off by more than half a
+    millimetre. Catching this needs a length standard or a closed loop, not a
+    residual against the very calibration that is wrong.
+    """
+    stretched = make_stereo_rig(
+        baseline_mm=274.0,
+        standoff_mm=648.0,
+        focal_mm=35.0,
+        pixel_pitch_mm=35.0 / 3240.0,
+        width=WIDTH,
+        height=HEIGHT,
+    )
+    result = match_stereo_pair(images[0], images[1], stretched, params)
+    keep = result.accepted
+    assert result.accepted_fraction > 0.95
+    assert float(np.nanmedian(result.sampson_px)) < 0.1
+
+    x_left, x_right = result.correspondences()
+    X_est = triangulate_optimal(
+        stretched.left.P, stretched.right.P, x_left, x_right
+    )
+    X_true, _ = _truth(rig, frame, result.left_xy[keep])
+    assert reconstruction_error(X_est[keep], X_true)["rms_um"] > 100.0
+    # ... while the correctly calibrated rig, same images, is at a few microns.
+    assert matched.accepted_fraction > 0.95
+
+
 def test_an_infinite_gate_leaves_convergence_as_the_only_test(images, rig, params):
     from dataclasses import replace
 
