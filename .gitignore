@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -21,3 +22,9 @@ htmlcov/
 !spec/conformance/**/*.hl3
 /out/
 /bench-out/
+=======
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+>>>>>>> origin/cursor/r2-o1-icgn-cpu-kernel-7c17
