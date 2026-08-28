@@ -356,26 +356,60 @@ def test_second_order_composition_agrees_with_first_order_on_affine():
     assert np.allclose(second_to_first_order(quadratic), compose_inverse(p, dp))
 
 
-def test_composed_warp_undoes_the_increment_on_the_subset():
-    """``W(p) . W(dp)^-1`` applied after ``W(dp)`` must land back on ``W(p)``.
+def composition_defect(p: np.ndarray, dp: np.ndarray, radius: float) -> float:
+    """Worst gap over the subset between ``W(p)`` and ``W(p).W(dp)^-1 . W(dp)``.
 
-    Checked where it has to hold -- on the subset itself -- because the
-    truncated representation is only second-order accurate off it.
+    Exact closure would give zero. The 6x6 representation drops the cubic and
+    quartic monomials that squaring the shape function produces, so what is
+    left is the size of that truncation, in pixels.
     """
-    p = P_SAMPLE
-    dp = np.array(
-        [0.05, 1e-3, -2e-3, 4e-5, -3e-5, 2e-5, -0.03, 2e-3, 1e-3, -2e-5, 3e-5, -4e-5]
-    )
     composed = compose_inverse_second_order(p, dp)
-    for dx, dy in [(-10.0, -10.0), (0.0, 6.0), (10.0, 10.0)]:
-        via_dp = shape_function(dp, dx, dy)
-        two_step = shape_function(composed, via_dp[0], via_dp[1])
-        direct = shape_function(p, dx, dy)
-        # The two-step route re-enters the shape function at an offset that is
-        # itself displaced, so agreement is to the order of the neglected
-        # cubic terms, not to round-off.
-        assert two_step[0] == pytest.approx(direct[0], abs=2e-3)
-        assert two_step[1] == pytest.approx(direct[1], abs=2e-3)
+    worst = 0.0
+    for dx in (-radius, 0.0, radius):
+        for dy in (-radius, 0.0, radius):
+            stepped = shape_function(dp, dx, dy)
+            two_step = shape_function(composed, stepped[0], stepped[1])
+            direct = shape_function(p, dx, dy)
+            worst = max(worst, abs(two_step[0] - direct[0]))
+            worst = max(worst, abs(two_step[1] - direct[1]))
+    return worst
+
+
+def _increment(scale: float) -> np.ndarray:
+    """A warp increment of the given translation scale, shaped like a real one."""
+    unit = np.array(
+        [1.0, 2e-2, -3e-2, 4e-4, -3e-4, 2e-4, -0.6, 3e-2, 2e-2, -2e-4, 3e-4, -4e-4]
+    )
+    return scale * unit
+
+
+def test_the_composition_truncation_is_second_order_and_bounded():
+    """Quadratic warps do not close under composition; this pins what is lost.
+
+    G-S1-SF2-1 allows an inexact second-order composition provided the
+    approximation and its error bound are stated and locked by a test. The
+    defect falls by more than a decade for every decade the increment shrinks,
+    so by the time IC-GN is near convergence -- increments below the 1e-4 px
+    tolerance -- it is some seven orders below the measurement itself and
+    cannot bias the fixed point.
+    """
+    radius = 15.0
+    defects = {
+        scale: composition_defect(P_SAMPLE, _increment(scale), radius)
+        for scale in (1e-1, 1e-2, 1e-3)
+    }
+    assert defects[1e-1] < 1e-3, f"defect at 0.1 px = {defects[1e-1]:.3e}"
+    assert defects[1e-2] < 1e-4, f"defect at 0.01 px = {defects[1e-2]:.3e}"
+    assert defects[1e-3] < 1e-5, f"defect at 0.001 px = {defects[1e-3]:.3e}"
+    assert defects[1e-2] < defects[1e-1] / 5.0
+    assert defects[1e-3] < defects[1e-2] / 5.0
+
+
+def test_the_composition_is_exactly_closed_on_the_affine_subgroup():
+    """No truncation where none is possible: affine increments close exactly."""
+    affine = first_to_second_order(np.array([1.3, 0.011, -0.004, -0.7, 0.002, 0.009]))
+    step = first_to_second_order(np.array([0.05, 1e-3, -2e-3, -0.03, 2e-3, 1e-3]))
+    assert composition_defect(affine, step, 15.0) < 1e-11
 
 
 def test_compose_inverse_second_order_rejects_a_degenerate_increment():
@@ -526,6 +560,57 @@ def test_second_order_recovers_a_pure_translation():
     assert np.max(np.abs(result.v - truth[:, V])) < 0.01
     assert np.max(np.abs(result.p[:, GRADIENT])) < 1e-3
     assert np.max(np.abs(result.p[:, CURVATURE])) < 1e-4
+
+
+def test_second_order_does_not_inflate_the_translation_bias():
+    """Over-parameterisation must not buy accuracy on curvature with bias here.
+
+    Six extra free parameters could in principle soak up interpolation
+    residue and drag the translation off. On a pure translation the
+    second-order bias has to stay within a factor of two of the first-order
+    bias, per gate G-S1-SF2-3.
+    """
+    points, field, second = solve_pair(
+        "translation", order=2, size=128, subset_radius=12
+    )
+    _, _, first = solve_pair("translation", order=1, size=128, subset_radius=12)
+    truth = field.params_at(points)
+
+    for measured_first, measured_second, column in (
+        (first.u, second.u, U),
+        (first.v, second.v, V),
+    ):
+        bias_first = abs(float(np.mean(measured_first - truth[:, column])))
+        bias_second = abs(float(np.mean(measured_second - truth[:, column])))
+        assert bias_second < 2.0 * max(bias_first, 1e-4), (
+            f"bias {bias_second:.3e} px against first-order {bias_first:.3e} px"
+        )
+
+
+def test_second_order_converges_at_least_as_widely_as_first_order():
+    """Gate G-S1-SF2-3: the richer model must not cost convergence."""
+    points, _, first = solve_pair("quadratic", order=1)
+    _, _, second = solve_pair("quadratic", order=2)
+    assert int(second.valid.sum()) >= int(first.valid.sum()) == len(points)
+
+
+def test_status_enum_numbering_is_unchanged():
+    """The numbering is normative (R2-O1 §2.7); second order adds no new codes.
+
+    A 12x12 Hessian that is too ill-conditioned reports the existing
+    ``SINGULAR_HESSIAN``, so downstream consumers need no new branches.
+    """
+    assert {status.name: int(status) for status in Status} == {
+        "UNCOMPUTED": 0,
+        "CONVERGED": 1,
+        "LOW_ZNCC": 2,
+        "NOT_CONVERGED": 3,
+        "OUT_OF_BOUNDS": 4,
+        "SINGULAR_HESSIAN": 5,
+        "DIVERGED": 6,
+        "NO_INITIAL_GUESS": 7,
+        "MASKED": 8,
+    }
 
 
 def test_second_order_recovers_a_uniaxial_stretch():
