@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# L-2 legal scan allowlist (R2-F4).
+# Format: path<TAB>pattern<TAB>reason
+# Hits under src/, tests/, benchmarks/, docs/ must have a row.
+# .agent_workspace/ is out of the L-2 scan surface.
+# The scanner test itself is skipped (it names the needles).
+

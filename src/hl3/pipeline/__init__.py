@@ -25,6 +25,7 @@ from .dic2d import (
     correlate_pair,
     lattice_shape,
     resolve_strain_backend,
+    strain_step_px,
     run_sequence,
     vsg_size_px,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "resolve_strain_backend",
     "run_sequence",
     "run_stereo_sequence",
+    "strain_step_px",
     "triangulate_correspondence",
     "vsg_size_px",
 ]

@@ -943,7 +943,7 @@ def icgn_second_order(
     trouble on large deformations.
 
     The quadratic terms buy accuracy where the displacement field is curved
-    inside one subset (bending, the neighbourhood of a crack tip or a hole)
+    inside one subset (bending, a hole, or a strong strain gradient)
     and cost precision where it is not: twelve parameters are fitted from the
     same pixels, so the noise floor rises and the Hessian is worse
     conditioned. The first-order solver stays the default for that reason.
