@@ -31,5 +31,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-testpaths = ["tests"]
+testpaths = ["tests", "src/tests"]
 pythonpath = ["src"]
