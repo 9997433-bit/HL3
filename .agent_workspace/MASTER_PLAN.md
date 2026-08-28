@@ -16,6 +16,10 @@
 - 相机：GenICam/Harvester + 厂商 SDK 适配层（对标 VIC-Snap）
 - 测试：合成散斑 + iDICs Challenge + 物理刚体夹具协议
 
+## 调度
+
+每轮 **10** 个子代理：**4×fable + 3×opus-fast + 3×gpt-sol**。共 3 轮。
+
 ## 工作包（WBS）
 
 见后续 `round1/` 各子代理报告，由父调度器收敛为最终路线图。
