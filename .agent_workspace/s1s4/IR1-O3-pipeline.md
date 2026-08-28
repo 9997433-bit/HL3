@@ -16,17 +16,17 @@ ACTUAL_MODEL_SLUG: claude-opus-5-thinking-high-fast
 
 | 项 | 数值 |
 |---|---|
-| **新增代码** | `src/hl3/pipeline/dic2d.py` **988 行** + `src/hl3/pipeline/__init__.py` 46 行 |
-| **新增测试** | `tests/test_pipeline_2d.py` **876 行 / 61 个用例**，`61 passed in 3.95s` |
-| 全仓（CI 口径，排除 IR1-O2 正在半写入的 `tests/test_strain.py`） | `338 passed, 1 failed in 18.03s`；唯一失败是 `test_s1_metrology.py` 撞上半合并的 `hl3.strain`，**不属于本任务的文件** |
+| **新增代码** | `src/hl3/pipeline/dic2d.py` **989 行** + `src/hl3/pipeline/__init__.py` 46 行 |
+| **新增测试** | `tests/test_pipeline_2d.py` **900 行 / 62 个用例**，`62 passed in 4.23s` |
+| 全仓（CI 口径 `pytest -q`） | **`460 passed in 17.52s`**，0 failed |
 | **固定参考下与内核逐位一致** | `np.array_equal(run.frames[1].p_total, icgn_first_order(...).p)` → **True**（`zncc`、`status` 同为 True） |
 | 亚像素精度（傅里叶位移散斑，128²，subset 21×21，36 POI） | 逐帧 mean\|误差\| **7.585e−04 / 1.001e−03 / 8.834e−04 px**，max **5.7e−03 px** |
 | 吞吐 | **770 POI-solves/s**（4 帧 × 36 POI，含参考帧自相关，单线程纯 NumPy） |
 | 参考更新的误差代价（同一 5 帧序列，末帧 mean\|误差\|） | FIXED **2.708e−07** ／ EVERY_N(2)（2 次更新）**1.092e−05** ／ EVERY_N(1)（4 次更新）**9.197e−05** px |
 | PREV_FRAME 种子的收益 | 全序列总迭代数 **584**（零种子 608），−4.0% |
-| 应变 | 当前 `hl3.strain` 半合并、import 即抛错 → 运行**照常完成**并在 `run.strain.reason` 写明原因 |
+| 应变 | IR1-O2 定稿后**自动接通**：`backend = hl3.strain.compute_strain`，刚体平移下 `exx/exy/eyy` 最大 **7.5e−08**。写这份实现时该模块还 import 即抛错，运行照常完成——两种状态都有用例 |
 
-一句话：**流水线只做"序列层"的事——建一次网格、逐帧调一次内核、传种子、换参考、合成累积 warp——相关数学一行都没有重写；固定参考下它逐位吐出内核自己的数字。** 应变从设计上就是可选的：`hl3.strain` 缺席、半写、签名不匹配三种情况都只降级不失败，只有 `StrainMode.REQUIRED` 才把它变成运行失败。
+一句话：**流水线只做"序列层"的事——建一次网格、逐帧调一次内核、传种子、换参考、合成累积 warp——相关数学一行都没有重写；固定参考下它逐位吐出内核自己的数字。** 应变从设计上就是可选的：`hl3.strain` 缺席、半写、签名不匹配三种情况都只降级不失败（只有 `StrainMode.REQUIRED` 才变成运行失败）；而它一旦定稿，链路**不改流水线代码就自己接通了**。
 
 ---
 
@@ -34,9 +34,9 @@ ACTUAL_MODEL_SLUG: claude-opus-5-thinking-high-fast
 
 | 文件 | 改动 |
 |---|---|
-| `src/hl3/pipeline/dic2d.py` | 新增，988 行 |
+| `src/hl3/pipeline/dic2d.py` | 新增，989 行 |
 | `src/hl3/pipeline/__init__.py` | 新增，46 行（只做再导出） |
-| `tests/test_pipeline_2d.py` | 新增，876 行 / 61 用例 |
+| `tests/test_pipeline_2d.py` | 新增，900 行 / 62 用例 |
 | `src/hl3/__init__.py` | `__all__ = ["correlate"]` → `["correlate", "pipeline"]`，**仅此一行** |
 | `.agent_workspace/s1s4/IR1-O3-pipeline.md` | 本报告 |
 
@@ -45,6 +45,8 @@ ACTUAL_MODEL_SLUG: claude-opus-5-thinking-high-fast
 1. `57aae98 feat(pipeline): 2D DIC sequence pipeline over the IC-GN reference kernel`
 2. `a5ae3a4 test(pipeline): 60 cases for the 2D pipeline, from MockCapture to strain`
 3. `1a08aae fix(pipeline): survive a strain module that raises on import`
+4. `2056320 docs(s1): IR1-O3 report on the 2D pipeline and its optional strain hand-off`
+5. `581fdb8 feat(pipeline): pass subset_px so the merged hl3.strain wires up`
 
 公开 API（`from hl3.pipeline import ...`）：
 
@@ -136,11 +138,14 @@ u_total = u_a + u_s ,  F_total = F_s · F_a
 
 本任务与 IR1-O2 并行，写完时 `hl3.strain` 还是个半成品（先是无 `__init__.py` 的命名空间包，随后 `__init__.py` 从自己的子模块 import 了尚不存在的名字，import 即抛 `ImportError`）。**这不是障碍，是需求**：相关计算是全流程里最贵的一段，不能因为下游模块没就绪而丢掉。
 
+交付时 IR1-O2 已定稿，下面的规则原样生效、**未为它写任何适配代码**：`hl3.strain.compute_strain` 被自动选中，网格 payload 直接对上，`StrainField` 数据类被解包成 `exx/exy/eyy` 三个 `(n_frames, ny, nx)` 场。
+
 查找与调用规则（`resolve_strain_backend` + `_strain_one`）：
 
 1. **入口名**按顺序试：`pipeline_strain`、`strain_fields`、`strain_field`、`compute_strain`、`strain_from_displacement`、`local_plane_fit`、`pointwise_least_squares`、`pls_gradients`。名单同时覆盖了 IR1-G2 在 `test_s1_metrology.py` 里期望的名字和 IR1-O2 现有的 `pls.py` 实现，谁先定稿都能接上。
 2. **payload**（按关键字传，后端签名里没有的键**自动丢弃**，所以窄签名不算错）：
-   `x, y, u, v, u_x, u_y, v_x, v_y, valid, zncc, window, step, step_px, subset_size, grid_shape`。
+   `x, y, u, v, u_x, u_y, v_x, v_y, valid, zncc, window, step, step_px, subset_size, subset_px, grid_shape`。
+   （`step_px` / `subset_px` 是 `step` / `subset_size` 的别名，因为 IR1-O2 定稿的 `compute_strain` 把这两个做成了**必填关键字**——它拒绝猜空间分辨率，这个选择是对的，流水线配合它多带两个键即可。）
 3. **先网格后点列**：POI 是完整格点时，先用 `(ny, nx)` 形状调一次（PLS 的 `L_window × L_window` 邻域拟合天然写在格点上，IR1-O2 的 `pls_gradients(u, v, ...)` 也是这个形状）；抛 `TypeError/ValueError` 时再用一维点列调一次。散点 AOI 只有点列一种。
 4. **返回值**接受 `Mapping`、`NamedTuple`、或带 `__dict__` 的对象（如 IR1-O2 的 `GradientField` 数据类）；只取其中的 ndarray 字段，标量属性（`window`、`fit_order`…）忽略。
 5. **失败一律降级**：`StrainOutcome(available=False, reason=...)`，`reason` 写明是"模块不可导入"、"没有已知入口"、还是"入口调用失败: <异常类型>: <消息>"。`provenance["strain"]` 同步记录。
@@ -149,7 +154,7 @@ u_total = u_a + u_s ,  F_total = F_s · F_a
 
 **本流水线不实现任何应变数学。** 唯一"接近应变"的输出是 `field("u_x"/"u_y"/"v_x"/"v_y")`，那是一阶形函数 `p` 的第 2/3/5/6 个分量原样取出（§2.11 里 `FROM_SHAPE_FUNCTION` 方案的输入），张量构造、邻点筛选、后滤波全部属于 `hl3.strain`。
 
-`L_VSG` 例外：`vsg_size_px()` 实现了 iDICs GPG 式 (7.2) `L_VSG = (L_window−1)·L_step + L_subset`，因为它只依赖 `(subset, step, window)` 三个流水线自己持有的参数，且 §1.7 要求它**始终**显示。与 `hl3.strain.vsg` 的同名公式重复一行代数是有意的取舍：让 provenance 在应变模块缺席时仍然完整。若 Impl-R2 要消除这一行重复，正确做法是流水线转调 `hl3.strain.vsg`，并接受"应变模块缺席时 `l_vsg_px` 为空"。
+`L_VSG` 例外：`vsg_size_px()` 实现了 iDICs GPG 式 (7.2) `L_VSG = (L_window−1)·L_step + L_subset`，因为它只依赖 `(subset, step, window)` 三个流水线自己持有的参数，且 §1.7 要求它**始终**显示。与 `hl3.strain.vsg_size_px` 重复一行代数是有意的取舍：让 provenance 在应变模块缺席时仍然完整。两者已交叉核对过一致（`(21, 5, 5) → 41`；IR1-O2 的版本多了后滤波窗口合并参数，本流水线不做后滤波，取不到那一支）。若 Impl-R2 要消除这一行重复，正确做法是流水线转调 `hl3.strain.vsg_size_px`，并接受"应变模块缺席时 `l_vsg_px` 为空"。
 
 ---
 
@@ -164,7 +169,7 @@ u_total = u_a + u_s ,  F_total = F_s · F_a
 | 参考更新 | 6 | EVERY_N 的更新序列与总位移真值；INCREMENTAL 由 ZNCC 触发（加噪）；丢轨点不再锚定；零收敛帧不晋升；非 FIXED 强制 `reference_index == 0`；FIXED 下参考帧可在序列中间（负位移真值） |
 | 输入契约 | 14 | 图像栈/列表/捕获源；尺寸不一致、非二维、空序列、参考越界、点集畸形、配置越界（6 组参数化）、类型错误、容器类型错误 |
 | provenance | 1 | 求解器名、subset/step/search_radius、`l_vsg_px`、网格形状、有效率、strain 子字典 |
-| 应变对接 | 19 | 模块缺席／import 抛错／无已知入口／入口顺序／注入覆盖／签名裁剪／`**kwargs` 全量／网格优先／点列回退／后端抛错降级／REQUIRED 抛错 ×2／返回值不可识别／对象返回解包／未知场名 ×2／OFF 不查找／降级后取场报错／对真实 `hl3.strain` 的两分支自适应断言 |
+| 应变对接 | 20 | 已合并模块的端到端链路（刚体平移下应变为零，模块未定稿时 skip）／模块缺席／import 抛错／无已知入口／入口顺序／注入覆盖／签名裁剪／`**kwargs` 全量／网格优先／点列回退／后端抛错降级／REQUIRED 抛错 ×2／返回值不可识别／对象返回解包／未知场名 ×2／OFF 不查找／降级后取场报错／对真实 `hl3.strain` 的两分支自适应断言 |
 
 最后一条值得单独说：`test_the_real_strain_module_is_used_when_it_is_importable` 不假设 `hl3.strain` 存在与否，而是断言**流水线的自述必须诚实**——不可用时 `frames == ()`，可用时 `backend == 已解析的名字` 且帧数对得上，"存在但调不通"时 `reason` 里必须出现该入口名。这样 IR1-O2 无论何时定稿，这条测试都不需要改，也不会变成一条永远为真的空断言。
 
@@ -206,7 +211,7 @@ u_total = u_a + u_s ,  F_total = F_s · F_a
 
 与 R3-O3 记录过的同类问题：本轮十个代理共用同一个工作树。本任务提交期间，兄弟代理把工作树切到了它自己的分支（`cursor/ir1-o2-strain-068c`），我的两个提交因此落在了那条分支上；同时集成分支 `cursor/dic-sota-plan-259d` 的远端已经前进。处置：**不动别人的 HEAD**，用 `git branch -f cursor/ir1-o3-pipeline-e17b <我的提交>` 建自己的分支 ref 并推送，再把同一提交快进推到 `cursor/dic-sota-plan-259d`（`3fa436f..a5ae3a4`，只含本任务两个提交，不夹带任何在写文件）。全程只 `git add` 独占路径，未使用 `git add .`，未 stage 兄弟代理的未跟踪文件（`src/hl3/strain/`、`tests/test_strain.py`、`tests/test_icgn_second.py`）。
 
-另：全仓测试当前有 1 条失败（`tests/test_s1_metrology.py::test_uniform_strain_smoke`），原因是 `hl3.strain` 正处于半合并状态，`import` 即抛错。该文件与该模块都不属于本任务的独占路径，未做任何改动；本流水线对同一状态的反应是**降级而非失败**（见 §3），并有专门用例 `test_a_module_that_explodes_on_import_downgrades` 锁定。
+另：本实现写作期间，`hl3.strain` 依次经历了「无 `__init__.py` 的命名空间包」→「`__init__.py` 从自己的子模块 import 不存在的名字，import 即抛错」→「定稿」三种状态，全仓测试也一度因此有 1 条失败（`tests/test_s1_metrology.py::test_uniform_strain_smoke`，非本任务文件，未改动）。流水线对前两种状态的反应都是**降级而非失败**，各有用例锁定（`test_missing_strain_module_downgrades_the_run`、`test_a_module_that_explodes_on_import_downgrades`）；定稿后链路自动接通，由 `test_the_merged_strain_module_closes_the_chain` 锁定。交付时全仓 `460 passed`。
 
 ---
 
