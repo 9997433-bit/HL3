@@ -20,8 +20,8 @@
 
 | 轮次 | 状态 | 派发 | 产物 |
 |------|------|------|------|
-| Round 1 初始构建与基线探索 | IN_PROGRESS | **10**（4/3/3） | `round1/` |
-| Round 2 靶向重构与深度优化 | PENDING | **10**（4/3/3） | `round2/` |
+| Round 1 初始构建与基线探索 | COMPLETE | **10**（4/3/3） | `round1/` + `ROUND1_BRIEF.md` |
+| Round 2 靶向重构与深度优化 | IN_PROGRESS | **10**（4/3/3） | `round2/` |
 | Round 3 SOTA 打磨与最终验收 | PENDING | **10**（4/3/3） | `round3/` |
 
 ## 法律与环境红线
