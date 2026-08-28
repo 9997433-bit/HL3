@@ -74,7 +74,7 @@ ACTUAL_MODEL_SLUG: gpt-5.6-sol-xhigh-fast
 - 中心密度：`0.02, 0.05, 0.08 /px²`，覆盖低、中、高三种纹理；
 - 量化：浮点真值、8-bit、12-bit 和 16-bit；
 - 对比度：满量程的 `20%, 50%, 80%`，另测线性增益/偏置；
-- 生产数据至少 `8×` 过采样，并做 `8×` 对 `16×` 收敛检查：降采样后内部 ROI 的 RMS 差异应小于 `1/100` 个输入噪声 sigma。
+- 生产数据至少 `8×` 过采样，并做 `8×` 对 `16×` 收敛检查：使用相同连续斑点中心和归一化尺度时，降采样后内部 ROI 的 RMS 差异应小于 `0.1` 个 8-bit gray count；未达标则继续提高过采样率。
 
 本轮原型 `.agent_workspace/round1/scripts/synth_speckle.py` 仅覆盖高斯散斑和已知平移。它使用带边缘护栏的高分辨率随机脉冲、频域高斯卷积、傅里叶相移和像素块积分；因此平移不依赖被测 ICGN 的双线性/双三次插值。示例：
 
@@ -125,7 +125,7 @@ v =  sinθ(x-cx) + (cosθ-1)(y-cy)
 
 采用明确的形变梯度 `F=diag(1+εx,1+εy)`。第一组令 `εy=0`，隔离轴向缩放；第二组令 `εy=-ν εx` 且 `ν=0.3`，模拟横向收缩。轴向工程应变取：
 
-`εx={±50,±100,±500,±1000,±5000,±10000,±50000,0.1,0.25,0.5} µstrain/无量纲对应值`，
+`εx={±50e-6,±100e-6,±500e-6,±1000e-6,±5000e-6,±10000e-6,±50000e-6,0.1,0.25,0.5}`。
 
 其中最后三项为 10%、25%、50%。有限应变的真值为 `Exx=((1+εx)^2-1)/2`。大应变使用小增量序列并同时测试首帧参考，分别暴露增量漂移和大搜索范围问题。报告平均偏差、空间 std、VSG 后应变峰值衰减及边界损失。
 
@@ -136,7 +136,7 @@ v =  sinθ(x-cx) + (cosθ-1)(y-cy)
 官方索引（当前主入口）：
 
 - iDICs DIC Challenge：<https://idics.org/challenge/>
-- SEM 重定向说明：<https://sem.org/dicchallenge>
+- SEM 历史入口（当前可能重定向或失效，以 iDICs 为准）：<https://sem.org/dicchallenge>
 - 2D Challenge 1.0 数据：<https://drive.google.com/drive/folders/1tNUKPJ7UJOm23JhERtkrIy5gSBiwV3Dj>
 - 2D Challenge 2.0 数据：<https://drive.google.com/drive/folders/1ASWZZZjV1SPnjiFncb5ofOtfrrRfFhSw>
 - 2.0 论文：<https://doi.org/10.1007/s11340-021-00806-6>
@@ -167,7 +167,7 @@ gdown --folder 'https://drive.google.com/drive/folders/1ASWZZZjV1SPnjiFncb5ofOtf
 
 - **bias**：中心行估计量相对官方真值的平均差；同时报告相位/周期区间内局部 bias。
 - **std（measurement resolution）**：噪声“未变形”图中心行的 1σ；另保留全场空间 std。
-- **空间分辨率**：随 Star 局部周期减小，拟合测得振幅；把振幅相对真值损失达到 20%（即幅值比 0.8）处的周期定义为主空间分辨率，单位 px，在线性插值后报告。为兼容部分后续论文，另输出 10% 损失点，但不能把两者混报。
+- **空间分辨率**：随 Star 局部周期减小，用官方方法对中心行中点/峰值拟合；最终 Challenge 比较主报振幅相对真值损失 10% 处的周期 `L10%`，单位 px。2018 年讨论文档曾采用 20% 损失（幅值比 0.8）门槛，因此兼容输出另报 `L20%`，但不能把两者混报。
 - **MEI**：位移 `MEI_u = sigma_u × L_u`；应变 `MEI_e = sigma_e × L_e²`。每种方法/参数按官方做法取三个最小 MEI 的平均值，越小越好。
 - **完整性**：有效点率、边缘覆盖率和误匹配；不能通过丢弃困难点只改善误差。
 

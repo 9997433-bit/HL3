@@ -228,10 +228,10 @@ def save_outputs(
     write_pgm(args.output / "deformed.pgm", deformed)
 
     guard = math.ceil(
-        args.margin / 2.0
-        if args.margin / 2.0
-        > max(abs(args.tx), abs(args.ty)) + 3.0 * args.speckle_sigma
-        else max(abs(args.tx), abs(args.ty)) + 3.0 * args.speckle_sigma
+        max(
+            args.margin / 2.0,
+            max(abs(args.tx), abs(args.ty)) + 3.0 * args.speckle_sigma,
+        )
     )
     valid_roi = {
         "x_min_inclusive": guard,
