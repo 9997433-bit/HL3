@@ -42,7 +42,14 @@ ACTUAL_MODEL_SLUG: claude-opus-5-thinking-high-fast
 
 **未触碰** `src/hl3/io/`、`src/hl3/stereo/`、`src/hl3/capture/`（R2-O2 / R2-O3 / R2-G3 的领地）。
 
-⚠️ **协作事故与处置**：本轮多个子代理共用同一个 checkout。写码期间另一个代理把工作树从我的分支切走，导致我的第一次提交 `3ee6302` 落在 `cursor/r2-g3-ci-mock-44b5` 上，并顺带把当时未跟踪的 `src/hl3/io/hdf5_schema.py`、`src/hl3/stereo/triangulate.py` 和一批 `__pycache__` 一起提交了。处置：(a) 用独立 worktree 把我的成果重新落到 `cursor/r2-o1-icgn-cpu-kernel-7c17`；(b) 在被误提交的分支上追加一个只做清理的提交，移除 `__pycache__` 并把 `src/hl3/__init__.py` 恢复为增量形式；(c) 未 rebase / 未 force-push，别人的提交完好。**建议父调度器给 Round 3 定一条规则：并行子代理各自 worktree，或串行化 `git add`。**
+⚠️ **协作事故与处置**：本轮多个子代理共用同一个 checkout。写码期间另一个代理把工作树从我的分支切走，导致我的第一次提交 `3ee6302` 落在 `cursor/r2-g3-ci-mock-44b5` 上，并顺带把当时未跟踪的 `src/hl3/io/hdf5_schema.py`、`src/hl3/stereo/triangulate.py` 和一批 `__pycache__` 一起提交了。处置：
+
+- (a) 用独立 `git worktree`（`/tmp/r2o1`）把我的成果重新落到 `cursor/r2-o1-icgn-cpu-kernel-7c17`，只含我自己的文件，不碰共享工作树的 HEAD；
+- (b) 误提交的 `__pycache__` 已由另一个代理的 `48ac48b`（`chore: ignore build caches, untrack committed bytecode`）清掉，我不再重复处理；
+- (c) 我自己造成的 `src/hl3/__init__.py` 覆写，用 `c8a328d` 在该分支上还原成增量形式（保留原 docstring，只加 `__all__ = ["correlate"]`）；
+- (d) 全程未 rebase、未 force-push、未改写他人提交。
+
+**建议父调度器给 Round 3 定一条规则：并行子代理各自 worktree，或串行化 `git add`。** 共享 checkout 下 `git add <dir>` 会捕获别人未提交的工作，这是结构性的，不是个别失误。
 
 ---
 
