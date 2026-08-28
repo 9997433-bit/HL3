@@ -859,6 +859,8 @@ def _study_degeneracy(
             keep[idx] = np.sqrt(np.trace(Sig, axis1=1, axis2=2)) < gate_sigma_mm
         out[name] = {
             "kept_fraction": float(keep.mean()),
+            "n_pooled": int(keep.size),
+            "n_rejected": int(keep.size - keep.sum()),
             "nonfinite_fraction": float(1.0 - finite.mean()),
             "ungated": reconstruction_error(X_est[finite], Xt[finite]),
             "gated": (
@@ -1077,14 +1079,15 @@ def main() -> None:  # pragma: no cover - console reporting only
     print(f"\n== degeneracy at sigma={d['sigma_px']} px "
           f"(gate: cheirality + sigma_pos < {d['gate_sigma_mm']} mm) ==")
     print(
-        f"  {'method':10s} {'kept':>8s} {'ungated_rms_um':>16s} "
+        f"  {'method':10s} {'rejected':>10s} {'ungated_rms_um':>16s} "
         f"{'ungated_max_um':>16s} {'gated_rms_um':>14s} {'gated_max_um':>14s}"
     )
     for name in methods:
         m = d[name]
         g = m["gated"]
+        rejected = f"{m['n_rejected']}/{m['n_pooled']}"
         print(
-            f"  {name:10s} {m['kept_fraction']:>8.4f} "
+            f"  {name:10s} {rejected:>10s} "
             f"{_fmt(m['ungated']['rms_um']):>16s} {_fmt(m['ungated']['max_um']):>16s} "
             f"{(_fmt(g['rms_um']) if g else 'n/a'):>14s} "
             f"{(_fmt(g['max_um']) if g else 'n/a'):>14s}"
