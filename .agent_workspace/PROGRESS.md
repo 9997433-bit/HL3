@@ -22,7 +22,7 @@
 |------|------|------|------|
 | Round 1 初始构建与基线探索 | COMPLETE | **10**（4/3/3） | `round1/` + `ROUND1_BRIEF.md` |
 | Round 2 靶向重构与深度优化 | COMPLETE | **10**（4/3/3） | `round2/` + `ROUND2_BRIEF.md` |
-| Round 3 SOTA 打磨与最终验收 | IN_PROGRESS | **10**（4/3/3） | `round3/` |
+| Round 3 SOTA 打磨与最终验收 | COMPLETE | **10**（4/3/3） | `round3/` + `ROUND3_BRIEF.md`；pytest **232 passed** |
 | Round 3 SOTA 打磨与最终验收 | PENDING | **10**（4/3/3） | `round3/` |
 
 ## 法律与环境红线

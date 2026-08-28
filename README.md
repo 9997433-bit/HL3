@@ -6,7 +6,7 @@
 
 HL3 是一套**开放、可审计**的数字图像相关（DIC）测量内核，目标覆盖 **HL3-2D**（单相机平面 DIC）与 **HL3-3D**（立体 / 多目 DIC）两条产品线，二者共用同一个 `hl3-core` 地基。
 
-> **当前状态：Round 3 / 3（收尾轮），预 alpha。** 这是一个规划与骨架阶段的仓库，不是可用于生产测量的软件。已有可运行代码的部分只有 CPU 参考相关器、立体几何与线性标定原型、合成采集与 HDF5 容器读写，共 **87 个测试**全绿（复现命令见下），且全部以「先正确、后快」为原则实现。
+> **当前状态：三轮调度完成，预 alpha。** 这是规划 + 测量内核地基，不是生产级 VIC 替代品。CPU 参考相关器、立体几何与线性标定原型、合成采集与 HDF5 容器读写，本机 **232 个测试**全绿，原则是「先正确、后快」。
 
 ---
 
@@ -33,15 +33,15 @@ HL3 是一套**开放、可审计**的数字图像相关（DIC）测量内核，
 ```bash
 git clone https://github.com/9997433-bit/HL3.git && cd HL3
 python3 -m pip install -e '.[test,hdf5]'
-python3 -m pytest -q tests src/tests        # 87 passed，4 vCPU 上约 9 s
+python3 -m pytest -q tests src/tests        # 232 passed，4 vCPU 上约 13 s
 ```
 
 运行时依赖只有 **NumPy**：`h5py` 仅在真正读写 `.hl3` 文件时需要（缺失时相关测试自动跳过而不是失败），`blake3` 缺失时哈希如实降级为 `blake2b-256`。不装包也可以直接用源码树：`PYTHONPATH=src python3 -m pytest -q tests src/tests`。
 
 | 模块 | 行数 | 已实现的内容 | 测试 | 状态 |
 |------|-----:|------|-----:|------|
-| [`src/hl3/correlate/icgn.py`](src/hl3/correlate/icgn.py) | 662 | 一阶（仿射）IC-GN 相关器：最小化 ZNSSD、报告 ZNCC；预滤波双三次 B 样条插值；四阶中心差分参考梯度；FFT-CC 整像素初值搜索；Cholesky + 对角加载；7 种逐点状态码；可选逐点 `(n, 6, 6)` 参数协方差 `2σ²(JᵀJ)⁻¹` | 21 | 参考实现，是所有加速后端必须复现的规范 |
-| [`src/hl3/stereo/triangulate.py`](src/hl3/stereo/triangulate.py) | 474 | 针孔投影 `P = K[R|t]`；由两个 `P` **解析**求基础矩阵（不用八点法）；单向/对称/Sampson 极线度量；四档三角化（中点、线性 DLT、迭代 Sampson、非线性重投影）；cheirality 门限；匹配噪声一阶传播到逐点 `3×3` 位置协方差 | 32（与 `calibrate.py` 共用） | 原型：纯 L0 针孔，**无任何镜头畸变** |
+| [`src/hl3/correlate/icgn.py`](src/hl3/correlate/icgn.py) | — | 一阶（仿射）IC-GN：ZNSSD、ZNCC、B 样条插值、FFT-CC 初值、秩亏 Hessian 门、状态码、可选协方差 | 127 | Round 3 加固后的 CPU 规范实现 |
+| [`src/hl3/stereo/triangulate.py`](src/hl3/stereo/triangulate.py) | — | 针孔 `P=K[R|t]`、极线度量、四档三角化、单点 NaN 隔离、位置协方差 | 71（与 `calibrate.py` 共用） | 原型：纯 L0 针孔，**无镜头畸变 / 无显微镜实现** |
 | [`src/hl3/stereo/calibrate.py`](src/hl3/stereo/calibrate.py) | 1098 | 合成双目机位与靶标生成、像素噪声注入、线性 DLT 相机反解（resection）、RQ 分解还原 `K, R, t`、Umeyama 刚体/相似配准、位姿与三维误差度量、端到端合成实验驱动 | 同上 | 原型：**只有线性 DLT 反解，不是 Zhang 平面标定** |
 | [`src/hl3/io/hdf5_schema.py`](src/hl3/io/hdf5_schema.py) | 1296 | `.hl3` 容器的组名/属性/数据集/枚举/位域常量（规范的机器可读镜像）、规范化 JSON 与内容/配置哈希、参考写入器（解析解合成场）、纯 h5py 参考读取器、结构验证器（含 `strict` 级） | 23 | schema 草案已冻结为 `1.0.0-draft.2` |
 | [`src/hl3/capture/mock.py`](src/hl3/capture/mock.py) | 135 | 确定性无硬件采集：可控丢帧、噪声、时间戳抖动，供 CPU-only CI 使用 | 9 | 可用 |
@@ -52,7 +52,7 @@ python3 -m pytest -q tests src/tests        # 87 passed，4 vCPU 上约 9 s
 三条可直接复现的入口：
 
 ```bash
-PYTHONPATH=src python3 -m pytest -q tests src/tests               # 全部 87 个测试
+PYTHONPATH=src python3 -m pytest -q tests src/tests               # 全部 232 个测试
 PYTHONPATH=src python3 -m hl3.io.hdf5_schema selftest             # HDF5 容器往返自检（未装 h5py 时打印跳过原因并正常退出）
 PYTHONPATH=src python3 -c "from hl3.stereo.calibrate import main; main()"   # 立体误差预算与退化研究，约 27 s
 ```
