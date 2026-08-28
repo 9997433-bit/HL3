@@ -36,6 +36,7 @@ from .triangulate import (
     cheirality_mask,
     epipolar_distance,
     fundamental_from_projections,
+    position_sigma,
     project,
     project_with_depth,
     projection_matrix,
@@ -49,6 +50,7 @@ from .triangulate import (
     triangulate_nonlinear,
     triangulate_optimal,
     triangulation_covariance,
+    triangulation_quality_mask,
 )
 
 __all__ = [
@@ -64,6 +66,7 @@ __all__ = [
     "look_at_extrinsics",
     "make_stereo_rig",
     "pose_errors",
+    "position_sigma",
     "project",
     "project_with_depth",
     "projection_matrix",
@@ -85,6 +88,7 @@ __all__ = [
     "triangulate_nonlinear",
     "triangulate_optimal",
     "triangulation_covariance",
+    "triangulation_quality_mask",
     "umeyama",
     "visible_mask",
 ]

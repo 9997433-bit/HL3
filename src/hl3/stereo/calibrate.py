@@ -35,10 +35,13 @@ What this module is *not*
 * **No lens distortion.** Pure L0 pinhole. See ``triangulate`` module docstring.
 * **No non-parametric distortion field / stereo microscopy** (spec section 4.1
   L6). Blocked behind the written patent-clearance opinion of spec section 10.4
-  and intentionally absent from this branch.
+  and intentionally absent from this branch. This bullet is a scope exclusion,
+  not a description of anything present in this file.
 
 Conventions match :mod:`hl3.stereo.triangulate`: millimetres, pixels,
-``x_cam = R @ X_world + t``.
+``x_cam = R @ X_world + t``, and the failure conventions documented in that
+module's docstring -- bad calls raise, missing measurements propagate as
+``nan``, degenerate geometry is reported rather than hidden.
 """
 
 from __future__ import annotations
@@ -48,7 +51,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from .triangulate import (
-    cheirality_mask,
     epipolar_distance,
     fundamental_from_projections,
     project,
@@ -61,7 +63,10 @@ from .triangulate import (
     triangulate_nonlinear,
     triangulate_optimal,
     triangulation_covariance,
+    triangulation_quality_mask,
 )
+
+_REL_EPS = 1e-12
 
 __all__ = [
     "Camera",
@@ -92,13 +97,51 @@ __all__ = [
 
 @dataclass(frozen=True)
 class Camera:
-    """Pinhole camera: intrinsics ``K`` plus world-to-camera rotation/translation."""
+    """Pinhole camera: intrinsics ``K`` plus world-to-camera rotation/translation.
+
+    Construction validates the shapes and checks that ``R`` really is a rotation.
+    A reflected or merely near-orthonormal ``R`` silently inverts cheirality and
+    the sign of the depth axis, which then shows up much later as an
+    inside-out reconstruction rather than as an error at the point of the
+    mistake. ``width`` and ``height`` default to zero, meaning "sensor extent
+    unknown"; :func:`visible_mask` refuses to run against such a camera rather
+    than declaring every point invisible.
+    """
 
     K: np.ndarray
     R: np.ndarray
     t: np.ndarray
     width: int = 0
     height: int = 0
+
+    def __post_init__(self) -> None:
+        K = np.asarray(self.K, dtype=float)
+        R = np.asarray(self.R, dtype=float)
+        t = np.asarray(self.t, dtype=float)
+        if K.size != 9:
+            raise ValueError(f"K must be 3x3, got shape {K.shape}")
+        if R.size != 9:
+            raise ValueError(f"R must be 3x3, got shape {R.shape}")
+        if t.size != 3:
+            raise ValueError(f"t must be a 3-vector, got shape {t.shape}")
+        K, R, t = K.reshape(3, 3), R.reshape(3, 3), t.reshape(3)
+        if not (np.all(np.isfinite(K)) and np.all(np.isfinite(R))
+                and np.all(np.isfinite(t))):
+            raise ValueError("K, R and t must all be finite")
+        if not np.allclose(R @ R.T, np.eye(3), atol=1e-8):
+            raise ValueError("R must be orthonormal")
+        if np.linalg.det(R) < 0.0:
+            raise ValueError("R must be a proper rotation (det(R) == +1), not a "
+                             "reflection")
+        if K[2, 2] == 0.0:
+            raise ValueError("K[2, 2] must be non-zero")
+        if int(self.width) < 0 or int(self.height) < 0:
+            raise ValueError("width and height must be non-negative")
+        object.__setattr__(self, "K", K)
+        object.__setattr__(self, "R", R)
+        object.__setattr__(self, "t", t)
+        object.__setattr__(self, "width", int(self.width))
+        object.__setattr__(self, "height", int(self.height))
 
     @property
     def P(self) -> np.ndarray:
@@ -123,6 +166,16 @@ class StereoRig:
     right: Camera
     standoff_mm: float = 0.0
 
+    def __post_init__(self) -> None:
+        for side in ("left", "right"):
+            if not isinstance(getattr(self, side), Camera):
+                raise TypeError(f"{side} must be a Camera")
+        if not float(self.standoff_mm) >= 0.0:
+            raise ValueError(
+                f"standoff_mm must be non-negative, got {self.standoff_mm}"
+            )
+        object.__setattr__(self, "standoff_mm", float(self.standoff_mm))
+
     @property
     def baseline_mm(self) -> float:
         """Distance between the two camera centres."""
@@ -131,8 +184,14 @@ class StereoRig:
     @property
     def stereo_angle_deg(self) -> float:
         """Angle subtended at the world origin by the two camera centres."""
-        a = -self.left.C / np.linalg.norm(self.left.C)
-        b = -self.right.C / np.linalg.norm(self.right.C)
+        na = float(np.linalg.norm(self.left.C))
+        nb = float(np.linalg.norm(self.right.C))
+        if na < _REL_EPS or nb < _REL_EPS:
+            raise ValueError(
+                "stereo angle is undefined: a camera centre sits at the world "
+                "origin, which is the vertex the angle is measured at"
+            )
+        a, b = -self.left.C / na, -self.right.C / nb
         return float(np.degrees(np.arccos(np.clip(a @ b, -1.0, 1.0))))
 
 
@@ -147,6 +206,13 @@ def intrinsics(
 
     Skew is locked to zero, matching the L0 default of spec section 4.1.
     """
+    focal_mm, pixel_pitch_mm = float(focal_mm), float(pixel_pitch_mm)
+    if not focal_mm > 0.0:
+        raise ValueError(f"focal_mm must be positive, got {focal_mm}")
+    if not pixel_pitch_mm > 0.0:
+        raise ValueError(f"pixel_pitch_mm must be positive, got {pixel_pitch_mm}")
+    if int(width) < 1 or int(height) < 1:
+        raise ValueError(f"width and height must be >= 1, got {width}x{height}")
     f = focal_mm / pixel_pitch_mm
     if principal_point is None:
         cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
@@ -166,9 +232,17 @@ def look_at_extrinsics(
     center = np.asarray(center, dtype=float).reshape(3)
     target = np.asarray(target, dtype=float).reshape(3)
     up = np.asarray(up, dtype=float).reshape(3)
+    if not (np.all(np.isfinite(center)) and np.all(np.isfinite(target))
+            and np.all(np.isfinite(up))):
+        raise ValueError("center, target and up must all be finite")
 
     zc = target - center
-    zc /= np.linalg.norm(zc)
+    nz = np.linalg.norm(zc)
+    if nz < 1e-12:
+        raise ValueError("'center' and 'target' coincide, so there is no optical axis")
+    if np.linalg.norm(up) < 1e-12:
+        raise ValueError("'up' must be a non-zero vector")
+    zc /= nz
     xc = np.cross(up, zc)
     nx = np.linalg.norm(xc)
     if nx < 1e-12:
@@ -197,6 +271,10 @@ def make_stereo_rig(
     is reproduced; no Challenge imagery is used or redistributed here.
     """
     target = np.asarray(target, dtype=float).reshape(3)
+    if not float(baseline_mm) > 0.0:
+        raise ValueError(f"baseline_mm must be positive, got {baseline_mm}")
+    if not float(standoff_mm) > 0.0:
+        raise ValueError(f"standoff_mm must be positive, got {standoff_mm}")
     K = intrinsics(focal_mm, pixel_pitch_mm, width, height)
     half = baseline_mm / 2.0
     cams = []
@@ -226,6 +304,10 @@ def synth_complex_surface(
     Returns ``(n_side**2, 3)`` world points; the surface faces the cameras
     (features protrude towards -z).
     """
+    if int(n_side) < 2:
+        raise ValueError(f"n_side must be >= 2, got {n_side}")
+    if not float(half_extent_mm) > 0.0:
+        raise ValueError(f"half_extent_mm must be positive, got {half_extent_mm}")
     g = np.linspace(-half_extent_mm, half_extent_mm, int(n_side))
     xx, yy = np.meshgrid(g, g, indexing="xy")
     x = xx.ravel()
@@ -245,6 +327,10 @@ def synth_planar_target(
     n_cols: int = 9, n_rows: int = 7, spacing_mm: float = 10.0
 ) -> np.ndarray:
     """Planar grid of target points in the board frame, centred, ``z = 0``."""
+    if int(n_cols) < 2 or int(n_rows) < 2:
+        raise ValueError(f"n_cols and n_rows must be >= 2, got {n_cols}x{n_rows}")
+    if not float(spacing_mm) > 0.0:
+        raise ValueError(f"spacing_mm must be positive, got {spacing_mm}")
     xs = (np.arange(n_cols) - (n_cols - 1) / 2.0) * spacing_mm
     ys = (np.arange(n_rows) - (n_rows - 1) / 2.0) * spacing_mm
     xx, yy = np.meshgrid(xs, ys, indexing="xy")
@@ -275,6 +361,10 @@ def synth_target_poses(
     next-best-view guidance of spec section 4.4: here it only guarantees that the
     poses are not degenerate, it does not yet score coverage or condition number.
     """
+    if int(n_poses) < 1:
+        raise ValueError(f"n_poses must be >= 1, got {n_poses}")
+    if float(depth_span_mm) < 0.0 or float(lateral_span_mm) < 0.0:
+        raise ValueError("depth_span_mm and lateral_span_mm must be non-negative")
     rng = np.random.default_rng(seed)
     poses = []
     for i in range(int(n_poses)):
@@ -289,26 +379,49 @@ def synth_target_poses(
 
 
 def visible_mask(cam: Camera, X: np.ndarray, margin_px: float = 0.0) -> np.ndarray:
-    """Boolean mask of points that fall inside ``cam``'s sensor and in front of it."""
+    """Boolean mask of points that fall inside ``cam``'s sensor and in front of it.
+
+    Refuses a camera with an unset sensor extent. Silently returning an
+    all-``False`` mask there would look exactly like "the geometry is wrong and
+    nothing is in view", which is an expensive thing to debug.
+    """
+    if cam.width < 1 or cam.height < 1:
+        raise ValueError(
+            "camera has no sensor extent (width/height are unset), so visibility "
+            "is undefined"
+        )
+    if float(margin_px) < 0.0:
+        raise ValueError(f"margin_px must be non-negative, got {margin_px}")
     P = cam.P
     X = np.asarray(X, dtype=float).reshape(-1, 3)
     w = X @ P[2, :3] + P[2, 3]
     x = cam.project(X)
-    return (
-        (w > 0)
-        & (x[:, 0] >= margin_px)
-        & (x[:, 0] <= cam.width - 1 - margin_px)
-        & (x[:, 1] >= margin_px)
-        & (x[:, 1] <= cam.height - 1 - margin_px)
-    )
+    with np.errstate(invalid="ignore"):
+        return (
+            (w > 0)
+            & (x[:, 0] >= margin_px)
+            & (x[:, 0] <= cam.width - 1 - margin_px)
+            & (x[:, 1] >= margin_px)
+            & (x[:, 1] <= cam.height - 1 - margin_px)
+        )
 
 
 def add_pixel_noise(
     x: np.ndarray, sigma_px: float, rng: np.random.Generator
 ) -> np.ndarray:
-    """Add isotropic Gaussian image-plane noise of ``sigma_px`` to ``(N, 2)`` pixels."""
+    """Add isotropic Gaussian image-plane noise of ``sigma_px`` to ``(N, 2)`` pixels.
+
+    ``sigma_px == 0`` is the meaningful noise-free case and returns a copy; a
+    negative value is rejected, because silently treating it as zero would let a
+    sign error turn a noise sweep into a row of duplicated noise-free results.
+    """
     x = np.asarray(x, dtype=float)
-    if sigma_px <= 0.0:
+    sigma_px = float(sigma_px)
+    if sigma_px < 0.0:
+        raise ValueError(f"sigma_px must be non-negative, got {sigma_px}")
+    if not isinstance(rng, np.random.Generator):
+        raise TypeError("rng must be a numpy.random.Generator")
+    if sigma_px == 0.0:
         return x.copy()
     return x + rng.normal(0.0, sigma_px, size=x.shape)
 
@@ -355,6 +468,11 @@ def resection_dlt(X: np.ndarray, x: np.ndarray) -> np.ndarray:
         raise ValueError("X and x must have the same number of rows")
     if n < 6:
         raise ValueError("DLT resection needs at least 6 correspondences")
+    if not (np.all(np.isfinite(X)) and np.all(np.isfinite(x))):
+        raise ValueError(
+            "DLT resection needs finite correspondences; drop unmatched target "
+            "points before calling"
+        )
     if np.linalg.matrix_rank(X - X.mean(axis=0), tol=1e-8) < 3:
         raise ValueError("DLT resection needs non-coplanar 3D points")
 
@@ -370,7 +488,13 @@ def resection_dlt(X: np.ndarray, x: np.ndarray) -> np.ndarray:
     _, _, vt = np.linalg.svd(A)
     Pn = vt[-1].reshape(3, 4)
     P = np.linalg.inv(T) @ Pn @ U
-    return P / np.linalg.norm(P[2, :3])
+    scale = np.linalg.norm(P[2, :3])
+    if scale < _REL_EPS:
+        raise ValueError(
+            "DLT resection produced a degenerate projection matrix; the target "
+            "geometry is not sufficient to fix the camera"
+        )
+    return P / scale
 
 
 def rq3(M: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -391,7 +515,16 @@ def decompose_projection(P: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndar
     front of the camera.
     """
     P = np.asarray(P, dtype=float).reshape(3, 4)
-    if np.linalg.det(P[:, :3]) < 0:
+    if not np.all(np.isfinite(P)):
+        raise ValueError("P contains non-finite entries")
+    M = P[:, :3]
+    det = np.linalg.det(M)
+    if abs(det) <= _REL_EPS * np.linalg.norm(M) ** 3:
+        raise ValueError(
+            "cannot decompose a projection matrix whose leading 3x3 block is "
+            "singular: it has no finite camera centre"
+        )
+    if det < 0:
         P = -P
     Kr, R = rq3(P[:, :3])
     d = np.sign(np.diag(Kr))
@@ -426,7 +559,17 @@ def umeyama(
     """
     A = np.asarray(A, dtype=float).reshape(-1, 3)
     B = np.asarray(B, dtype=float).reshape(-1, 3)
+    if A.shape != B.shape:
+        raise ValueError(
+            f"A and B must have the same shape, got {A.shape} and {B.shape}"
+        )
     n = A.shape[0]
+    # Three non-collinear points are the minimum that fixes a rotation; fewer
+    # leaves a whole family of solutions and the SVD picks an arbitrary member.
+    if n < 3:
+        raise ValueError(f"umeyama needs at least 3 point pairs, got {n}")
+    if not (np.all(np.isfinite(A)) and np.all(np.isfinite(B))):
+        raise ValueError("umeyama needs finite point pairs")
     muA, muB = A.mean(axis=0), B.mean(axis=0)
     Ac, Bc = A - muA, B - muB
     C = (Bc.T @ Ac) / n
@@ -452,7 +595,13 @@ def pose_errors(
     R_est: np.ndarray, t_est: np.ndarray, R_true: np.ndarray, t_true: np.ndarray
 ) -> dict[str, float]:
     """Rotation angle error (degrees) and translation error (mm, absolute/relative)."""
-    dR = np.asarray(R_est) @ np.asarray(R_true).T
+    R_est = np.asarray(R_est, dtype=float)
+    R_true = np.asarray(R_true, dtype=float)
+    if R_est.shape != (3, 3) or R_true.shape != (3, 3):
+        raise ValueError(
+            f"R_est and R_true must be 3x3, got {R_est.shape} and {R_true.shape}"
+        )
+    dR = R_est @ R_true.T
     cos = (np.trace(dR) - 1.0) / 2.0
     dt = np.asarray(t_est, dtype=float) - np.asarray(t_true, dtype=float)
     norm_true = float(np.linalg.norm(t_true))
@@ -473,11 +622,44 @@ def reconstruction_error(
     are reported as well. Comparing the aligned and unaligned numbers separates
     genuine shape error from a rigid frame offset -- exactly the distinction the
     Challenge preliminary analysis found people were missing (spec section 7.3).
+
+    Points that are not finite in either set are excluded and counted in
+    ``n_points`` versus ``n_finite``. Reporting the error over the points that
+    were actually reconstructed, plus the coverage, is more useful than
+    collapsing the whole summary to ``nan`` because one POI dropped -- but the
+    two numbers have to travel together, or dropping the hard points becomes a
+    free way to improve the RMS.
     """
     X_est = np.asarray(X_est, dtype=float).reshape(-1, 3)
     X_true = np.asarray(X_true, dtype=float).reshape(-1, 3)
+    if X_est.shape != X_true.shape:
+        raise ValueError(
+            f"X_est and X_true must have the same shape, got {X_est.shape} "
+            f"and {X_true.shape}"
+        )
 
-    out: dict[str, float] = {}
+    n_points = X_est.shape[0]
+    finite = np.all(np.isfinite(X_est), axis=1) & np.all(np.isfinite(X_true), axis=1)
+    X_est, X_true = X_est[finite], X_true[finite]
+    n_finite = int(finite.sum())
+
+    out: dict[str, float] = {"n_points": float(n_points), "n_finite": float(n_finite)}
+    if n_finite == 0:
+        nan = float("nan")
+        if align:
+            out.update({"align_rotation_deg": nan, "align_translation_um": nan})
+        out.update(
+            dict.fromkeys(
+                (
+                    "rms_um", "mean_um", "p95_um", "max_um",
+                    "rms_x_um", "rms_y_um", "rms_z_um",
+                    "bias_x_um", "bias_y_um", "bias_z_um",
+                ),
+                nan,
+            )
+        )
+        return out
+
     if align:
         R, t, _ = umeyama(X_est, X_true, with_scale=False)
         X_est = X_est @ R.T + t
@@ -851,12 +1033,12 @@ def _study_degeneracy(
     for name, arrs in pooled.items():
         X_est = np.concatenate(arrs)
         finite = np.all(np.isfinite(X_est), axis=1)
-        keep = finite.copy()
-        keep[keep] = cheirality_mask([PL, PR], X_est[keep])
-        idx = np.flatnonzero(keep)
-        if idx.size:
-            Sig = triangulation_covariance([PL, PR], X_est[idx], sigma_px=sigma_px)
-            keep[idx] = np.sqrt(np.trace(Sig, axis1=1, axis2=2)) < gate_sigma_mm
+        keep = triangulation_quality_mask(
+            [PL, PR],
+            X_est,
+            sigma_px=sigma_px,
+            max_position_sigma_mm=gate_sigma_mm,
+        )
         out[name] = {
             "kept_fraction": float(keep.mean()),
             "n_pooled": int(keep.size),
