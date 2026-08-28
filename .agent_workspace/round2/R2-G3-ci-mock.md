@@ -60,4 +60,14 @@ Windows。这样不会意外把需许可的 VIC 安装、PC key 或 Windows 评�
 
 ## 验证状态
 
-实现快照提交后执行本地等价命令，并在最终提交中记录结果。
+在 Linux CPU-only 云机执行与工作流等价的命令：
+
+```text
+CI=true HL3_CI_CPU_ONLY=1 CUDA_VISIBLE_DEVICES='' PYTHONPATH=src \
+  python3 -m pytest -q tests src/tests
+...........                                                              [100%]
+11 passed in 0.21s
+```
+
+实测版本：Python 3.12.3、NumPy 2.4.4、pytest 9.1.1。GitHub Actions 远端
+状态需在推送后由平台调度；本报告不把本地等价运行误报为远端 workflow。
