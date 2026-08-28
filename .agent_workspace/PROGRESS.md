@@ -24,8 +24,8 @@
 | Round 2 靶向重构与深度优化 | COMPLETE | **10**（4/3/3） | `round2/` + `ROUND2_BRIEF.md` |
 | Round 3 SOTA 打磨与最终验收 | COMPLETE | **10**（4/3/3） | `round3/` + `ROUND3_BRIEF.md`；pytest **232 passed** |
 | Impl-R1（S1） | COMPLETE | **10**（4/3/3） | 二阶 ICGN + strain + pipeline；460 passed |
-| Impl-R2（S2+S3） | IN_PROGRESS | **10**（4/3/3） | stereo match + UQ |
-| Impl-R3（S4） | PENDING | **10**（4/3/3） | CLI/GUI/FEA；然后停止 |
+| Impl-R2（S2+S3） | COMPLETE | **10**（4/3/3） | match + dic3d + UQ；689 passed |
+| Impl-R3（S4） | IN_PROGRESS | **10**（4/3/3） | CLI/viz/FEA/GUI；然后停止 |
 
 ## 法律与环境红线
 
