@@ -1,12 +1,14 @@
-"""HL3-3D stereo prototype: pinhole cameras, triangulation, synthetic calibration.
+"""HL3-3D stereo: pinhole cameras, triangulation, calibration, correspondence.
 
-Round 2 lightweight reference implementation (NumPy only) of the geometry layer
-described in ``.agent_workspace/round1/R1-O2-hl3-3d-spec.md``. See the module
-docstrings of :mod:`hl3.stereo.triangulate` and :mod:`hl3.stereo.calibrate` for
-the exact scope: pinhole L0 only, no lens distortion, no Zhang planar
-calibration, and no non-parametric distortion field for stereo microscopy (that
-layer stays blocked behind the patent-clearance opinion required by spec
-section 10.4).
+Lightweight reference implementation (NumPy only) of the geometry layer
+described in ``.agent_workspace/round1/R1-O2-hl3-3d-spec.md``: the projection
+and triangulation algebra of :mod:`hl3.stereo.triangulate`, the synthetic
+calibration testbed of :mod:`hl3.stereo.calibrate`, and the reference-frame
+stereo matcher of :mod:`hl3.stereo.match`. See those module docstrings for the
+exact scope: pinhole L0 only, no lens distortion, no image rectification, no
+Zhang planar calibration, and no non-parametric distortion field for stereo
+microscopy (that layer stays blocked behind the patent-clearance opinion
+required by spec section 10.4).
 """
 
 from __future__ import annotations
@@ -30,6 +32,16 @@ from .calibrate import (
     synth_target_poses,
     umeyama,
     visible_mask,
+)
+from .match import (
+    EpipolarResiduals,
+    MatchSeed,
+    StereoMatchParams,
+    StereoMatchResult,
+    epipolar_residuals,
+    match_stereo_pair,
+    plane_disparity,
+    rig_fundamental,
 )
 from .triangulate import (
     camera_center,
@@ -55,16 +67,23 @@ from .triangulate import (
 
 __all__ = [
     "Camera",
+    "EpipolarResiduals",
+    "MatchSeed",
+    "StereoMatchParams",
+    "StereoMatchResult",
     "StereoRig",
     "add_pixel_noise",
     "camera_center",
     "cheirality_mask",
     "decompose_projection",
     "epipolar_distance",
+    "epipolar_residuals",
     "fundamental_from_projections",
     "intrinsics",
     "look_at_extrinsics",
     "make_stereo_rig",
+    "match_stereo_pair",
+    "plane_disparity",
     "pose_errors",
     "position_sigma",
     "project",
@@ -75,6 +94,7 @@ __all__ = [
     "reprojection_residuals",
     "reprojection_rmse",
     "resection_dlt",
+    "rig_fundamental",
     "rq3",
     "run_synthetic_experiment",
     "sampson_correct",
