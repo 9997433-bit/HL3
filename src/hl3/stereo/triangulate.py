@@ -49,11 +49,12 @@ import numpy as np
 
 __all__ = [
     "camera_center",
+    "cheirality_mask",
     "epipolar_distance",
     "fundamental_from_projections",
-    "projection_matrix",
     "project",
     "project_with_depth",
+    "projection_matrix",
     "reprojection_residuals",
     "reprojection_rmse",
     "sampson_correct",
@@ -254,7 +255,11 @@ def triangulate_multiview_dlt(
 
 
 def triangulate_dlt(
-    P1: np.ndarray, P2: np.ndarray, x1: np.ndarray, x2: np.ndarray, normalize: bool = True
+    P1: np.ndarray,
+    P2: np.ndarray,
+    x1: np.ndarray,
+    x2: np.ndarray,
+    normalize: bool = True,
 ) -> np.ndarray:
     """Two-view linear DLT triangulation."""
     return triangulate_multiview_dlt([P1, P2], [x1, x2], normalize=normalize)
@@ -424,6 +429,22 @@ def reprojection_rmse(
     """Root-mean-square reprojection error in pixels over all views and points."""
     r = reprojection_residuals(Ps, xs, X)
     return float(np.sqrt(np.mean(r**2) * 2.0))
+
+
+def cheirality_mask(Ps: Sequence[np.ndarray], X: np.ndarray) -> np.ndarray:
+    """Boolean mask of points lying in front of every camera.
+
+    The cheapest half of the quality gate of spec S5.1 stage D. It catches sign
+    inversions and rays that cross behind a camera, but *not* the far-field
+    degeneracy where near-parallel rays admit a low-residual solution near
+    infinity -- for that, gate on :func:`triangulation_covariance` as well.
+    """
+    X = np.asarray(X, dtype=float).reshape(-1, 3)
+    ok = np.ones(X.shape[0], dtype=bool)
+    for P in Ps:
+        P = np.asarray(P, dtype=float).reshape(3, 4)
+        ok &= (X @ P[2, :3] + P[2, 3]) > 0
+    return ok
 
 
 def triangulation_covariance(
