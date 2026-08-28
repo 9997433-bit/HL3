@@ -1,4 +1,4 @@
-"""CPU reference implementation of first-order IC-GN digital image correlation.
+"""CPU reference implementation of IC-GN digital image correlation.
 
 This module is the normative (slow, readable) reference for the HL3-2D local
 correlator described in ``.agent_workspace/round1/R1-O1-hl3-2d-spec.md`` §2.
@@ -10,7 +10,11 @@ Design choices, all taken from the Round 1 spec:
   directly); ZNCC is reported, using ``C_ZNSSD = 2 (1 - C_ZNCC)``.
   Zero-mean + normalisation makes the solver exactly invariant to an affine
   greyscale change ``g = a f + b`` with ``a > 0``.
-* Shape function: first order (affine), ``p = (u, u_x, u_y, v, v_x, v_y)``.
+* Shape function: first order (affine), ``p = (u, u_x, u_y, v, v_x, v_y)``,
+  or second order (quadratic), ``p = (u, u_x, u_y, u_xx, u_xy, u_yy, v, v_x,
+  v_y, v_xx, v_xy, v_yy)``. The order is chosen by the entry point
+  (:func:`icgn_first_order` / :func:`icgn_second_order`) or, via
+  :func:`icgn`, by :attr:`ICGNParams.shape_order`.
 * Inverse-compositional Gauss-Newton: the warp increment is applied to the
   *reference* subset, so the steepest-descent images, the Hessian and its
   factorisation are computed once per point instead of once per iteration.
@@ -49,7 +53,16 @@ __all__ = [
     "warp_matrix",
     "warp_params",
     "compose_inverse",
+    "warp_matrix_second_order",
+    "warp_params_second_order",
+    "compose_inverse_second_order",
+    "first_to_second_order",
+    "second_to_first_order",
+    "shape_param_count",
+    "shape_param_labels",
+    "icgn",
     "icgn_first_order",
+    "icgn_second_order",
 ]
 
 # A subset whose RMS contrast is below this fraction of the whole image's
@@ -102,8 +115,13 @@ class ICGNParams:
     # but too faint to be worth correlating.
     min_contrast: float = 0.0
     max_hessian_cond: float = 1e10  # spec §2.6: cond(H) above this is singular
+    # 1 = affine (6 parameters), 2 = quadratic (12 parameters). Consulted by
+    # :func:`icgn`; the order-specific entry points fix it themselves.
+    shape_order: int = 1
 
     def __post_init__(self) -> None:
+        if self.shape_order not in (1, 2):
+            raise ValueError(f"shape_order must be 1 or 2, got {self.shape_order!r}")
         if self.subset_radius < 2:
             raise ValueError("subset_radius must be >= 2")
         if self.step < 1:
@@ -131,6 +149,10 @@ class ICGNParams:
     def subset_size(self) -> int:
         return 2 * self.subset_radius + 1
 
+    @property
+    def n_shape_params(self) -> int:
+        return shape_param_count(self.shape_order)
+
 
 @dataclass
 class ICGNResult:
@@ -138,11 +160,12 @@ class ICGNResult:
 
     x: np.ndarray  # (n,) reference-configuration x
     y: np.ndarray  # (n,) reference-configuration y
-    p: np.ndarray  # (n, 6) = (u, u_x, u_y, v, v_x, v_y)
+    p: np.ndarray  # (n, 6) or (n, 12); see shape_param_labels(shape_order)
     zncc: np.ndarray  # (n,)
     iterations: np.ndarray  # (n,) int
     status: np.ndarray  # (n,) Status as int
-    covariance: np.ndarray | None = field(default=None)  # (n, 6, 6) or None
+    covariance: np.ndarray | None = field(default=None)  # (n, k, k) or None
+    shape_order: int = 1
 
     @property
     def u(self) -> np.ndarray:
@@ -150,7 +173,12 @@ class ICGNResult:
 
     @property
     def v(self) -> np.ndarray:
-        return self.p[:, 3]
+        return self.p[:, _v_index(self.shape_order)]
+
+    @property
+    def p_labels(self) -> tuple[str, ...]:
+        """Names of the columns of :attr:`p`, in order."""
+        return shape_param_labels(self.shape_order)
 
     @property
     def valid(self) -> np.ndarray:
@@ -521,6 +549,49 @@ def _window_sums(image: np.ndarray, n: int) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------
+# Shape function bookkeeping
+# --------------------------------------------------------------------------
+
+_FIRST_ORDER_LABELS = ("u", "u_x", "u_y", "v", "v_x", "v_y")
+_SECOND_ORDER_LABELS = (
+    "u",
+    "u_x",
+    "u_y",
+    "u_xx",
+    "u_xy",
+    "u_yy",
+    "v",
+    "v_x",
+    "v_y",
+    "v_xx",
+    "v_xy",
+    "v_yy",
+)
+
+
+def _check_order(order: int) -> int:
+    order = int(order)
+    if order not in (1, 2):
+        raise ValueError(f"shape order must be 1 or 2, got {order}")
+    return order
+
+
+def shape_param_count(order: int) -> int:
+    """Number of warp parameters: 6 for affine, 12 for quadratic."""
+    return 6 if _check_order(order) == 1 else 12
+
+
+def shape_param_labels(order: int) -> tuple[str, ...]:
+    """Names of the warp parameters, in the order they appear in ``p``."""
+    return _FIRST_ORDER_LABELS if _check_order(order) == 1 else _SECOND_ORDER_LABELS
+
+
+def _v_index(order: int) -> int:
+    """Column of ``p`` holding the ``v`` translation."""
+    return 3 if _check_order(order) == 1 else 6
+
+
+# --------------------------------------------------------------------------
 # First-order shape function algebra
 # --------------------------------------------------------------------------
 
@@ -605,6 +676,221 @@ def compose_inverse(p: np.ndarray, dp: np.ndarray) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------
+# Second-order shape function algebra
+# --------------------------------------------------------------------------
+#
+# The quadratic shape function (Lu & Cary 1998) displaces a subset point at
+# offset ``(dx, dy)`` from the POI by
+#
+#     xi  = u + u_x dx + u_y dy + u_xx dx^2 / 2 + u_xy dx dy + u_yy dy^2 / 2
+#     eta = v + v_x dx + v_y dy + v_xx dx^2 / 2 + v_xy dx dy + v_yy dy^2 / 2
+#
+# Inverse-compositional Gauss-Newton needs the warp set to be closed under
+# composition and inversion, which the quadratic *polynomials* are not. The
+# standard remedy (Gao et al. 2015) is to represent the warp by its action on
+# the monomial vector ``S = (dx^2, dy^2, dx dy, dx, dy, 1)``, i.e. by a 6x6
+# matrix, and to drop the cubic and quartic monomials that squaring produces.
+# Matrices then compose and invert exactly; the truncation only means the
+# composed *matrix* is the second-order part of the true composition, which is
+# all the second-order shape function can represent anyway. For a purely
+# affine warp nothing is dropped and the representation is an exact group
+# homomorphism -- see ``tests/test_icgn_second.py``.
+
+
+def _as_warp_params2(p: np.ndarray, name: str = "p") -> np.ndarray:
+    array = np.asarray(p, dtype=np.float64).reshape(-1)
+    if array.size != 12:
+        raise ValueError(f"{name} must have 12 elements, got {array.size}")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must be finite")
+    return array
+
+
+def warp_matrix_second_order(p: np.ndarray) -> np.ndarray:
+    """6x6 warp acting on ``S = (dx^2, dy^2, dx dy, dx, dy, 1)``.
+
+    ``p = (u, u_x, u_y, u_xx, u_xy, u_yy, v, v_x, v_y, v_xx, v_xy, v_yy)``.
+    Rows 3 and 4 carry the shape function itself; rows 0-2 carry the
+    second-order part of the products needed to close the group.
+    """
+    u, ux, uy, uxx, uxy, uyy, v, vx, vy, vxx, vxy, vyy = _as_warp_params2(p)
+
+    # Coefficients of xi and eta on the monomial basis.
+    a, b, c = 0.5 * uxx, 0.5 * uyy, uxy  # dx^2, dy^2, dx dy
+    d, e, f = 1.0 + ux, uy, u  # dx, dy, 1
+    a2, b2, c2 = 0.5 * vxx, 0.5 * vyy, vxy
+    d2, e2, f2 = vx, 1.0 + vy, v
+
+    return np.array(
+        [
+            [
+                d * d + 2.0 * f * a,
+                e * e + 2.0 * f * b,
+                2.0 * d * e + 2.0 * f * c,
+                2.0 * f * d,
+                2.0 * f * e,
+                f * f,
+            ],
+            [
+                d2 * d2 + 2.0 * f2 * a2,
+                e2 * e2 + 2.0 * f2 * b2,
+                2.0 * d2 * e2 + 2.0 * f2 * c2,
+                2.0 * f2 * d2,
+                2.0 * f2 * e2,
+                f2 * f2,
+            ],
+            [
+                d * d2 + f * a2 + f2 * a,
+                e * e2 + f * b2 + f2 * b,
+                d * e2 + e * d2 + f * c2 + f2 * c,
+                f * d2 + f2 * d,
+                f * e2 + f2 * e,
+                f * f2,
+            ],
+            [a, b, c, d, e, f],
+            [a2, b2, c2, d2, e2, f2],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def warp_params_second_order(matrix: np.ndarray) -> np.ndarray:
+    """Read the 12 warp parameters back out of a 6x6 warp matrix.
+
+    Only the two shape-function rows are read; the redundant product rows are
+    ignored, which is what makes the truncated composition well defined.
+    """
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if matrix.shape != (6, 6):
+        raise ValueError(f"matrix must be 6x6, got {matrix.shape}")
+    return np.array(
+        [
+            matrix[3, 5],
+            matrix[3, 3] - 1.0,
+            matrix[3, 4],
+            2.0 * matrix[3, 0],
+            matrix[3, 2],
+            2.0 * matrix[3, 1],
+            matrix[4, 5],
+            matrix[4, 3],
+            matrix[4, 4] - 1.0,
+            2.0 * matrix[4, 0],
+            matrix[4, 2],
+            2.0 * matrix[4, 1],
+        ],
+        dtype=np.float64,
+    )
+
+
+def compose_inverse_second_order(p: np.ndarray, dp: np.ndarray) -> np.ndarray:
+    """The inverse-compositional update ``W(p) <- W(p) . W(dp)^-1``, 12-param.
+
+    The affine block of the increment is screened first with the same relative
+    determinant test as :func:`compose_inverse`: a quadratic warp whose linear
+    part is degenerate folds the subset onto a curve at its own centre, and the
+    6x6 solve would answer with a huge but finite parameter vector rather than
+    refusing.
+    """
+    dp = _as_warp_params2(dp, "dp")
+    p = _as_warp_params2(p, "p")
+
+    a00, a01 = 1.0 + dp[1], dp[2]
+    a10, a11 = dp[7], 1.0 + dp[8]
+    determinant = a00 * a11 - a01 * a10
+    magnitude = max(abs(a00), abs(a01), abs(a10), abs(a11), 1.0)
+    if abs(determinant) <= 1e-12 * magnitude * magnitude:
+        raise np.linalg.LinAlgError("degenerate warp increment")
+
+    left = warp_matrix_second_order(p)
+    right = warp_matrix_second_order(dp)
+    # X = left @ inv(right)  <=>  right.T @ X.T = left.T
+    composed = np.linalg.solve(right.T, left.T).T
+    if not np.all(np.isfinite(composed)):
+        raise np.linalg.LinAlgError("degenerate warp increment")
+    return warp_params_second_order(composed)
+
+
+def first_to_second_order(p: np.ndarray) -> np.ndarray:
+    """Embed a 6-parameter affine warp in the 12-parameter quadratic family."""
+    u, ux, uy, v, vx, vy = _as_warp_params(p)
+    return np.array(
+        [u, ux, uy, 0.0, 0.0, 0.0, v, vx, vy, 0.0, 0.0, 0.0], dtype=np.float64
+    )
+
+
+def second_to_first_order(p: np.ndarray) -> np.ndarray:
+    """Drop the curvature terms of a 12-parameter warp, keeping the affine part.
+
+    This is a projection, not an inverse of :func:`first_to_second_order` in
+    the other direction: the discarded terms carry real deformation whenever
+    they are non-zero.
+    """
+    q = _as_warp_params2(p)
+    return np.array([q[0], q[1], q[2], q[6], q[7], q[8]], dtype=np.float64)
+
+
+# --------------------------------------------------------------------------
+# Order-generic shape function interface used by the solver
+# --------------------------------------------------------------------------
+
+
+class _ShapeFunction:
+    """Everything the IC-GN loop needs to know about a shape-function order.
+
+    Splitting this out keeps one solver: the two orders differ only in the
+    monomial basis their steepest-descent images are built from, in how a warp
+    increment is composed away, and in the diagonal scaling that puts every
+    parameter into "pixels of motion at the subset edge".
+    """
+
+    __slots__ = ("labels", "n_half", "n_params", "order", "v_index")
+
+    def __init__(self, order: int) -> None:
+        self.order = _check_order(order)
+        self.n_params = shape_param_count(self.order)
+        self.n_half = self.n_params // 2
+        self.labels = shape_param_labels(self.order)
+        self.v_index = _v_index(self.order)
+
+    def basis(self, dx: np.ndarray, dy: np.ndarray) -> np.ndarray:
+        """``(n, n_half)`` monomials the shape function is linear in."""
+        ones = np.ones_like(dx)
+        if self.order == 1:
+            return np.column_stack((ones, dx, dy))
+        return np.column_stack((ones, dx, dy, 0.5 * dx * dx, dx * dy, 0.5 * dy * dy))
+
+    def scale(self, radius: float) -> np.ndarray:
+        """Magnitude of each basis monomial at a subset corner."""
+        if self.order == 1:
+            block = np.array([1.0, radius, radius], dtype=np.float64)
+        else:
+            r2 = radius * radius
+            block = np.array(
+                [1.0, radius, radius, 0.5 * r2, r2, 0.5 * r2], dtype=np.float64
+            )
+        return np.concatenate((block, block))
+
+    def steepest_descent(
+        self, fx: np.ndarray, fy: np.ndarray, basis: np.ndarray
+    ) -> np.ndarray:
+        """``grad f . dW/dp`` at ``p = 0``, one column per parameter."""
+        return np.hstack((fx[:, None] * basis, fy[:, None] * basis))
+
+    def compose_inverse(self, p: np.ndarray, dp: np.ndarray) -> np.ndarray:
+        if self.order == 1:
+            return compose_inverse(p, dp)
+        return compose_inverse_second_order(p, dp)
+
+    def promote(self, p: np.ndarray) -> np.ndarray:
+        """Convert a 6-parameter warp into this order's parameterisation."""
+        return p if self.order == 1 else first_to_second_order(p)
+
+
+_SHAPE_FUNCTIONS = {1: _ShapeFunction(1), 2: _ShapeFunction(2)}
+
+
+# --------------------------------------------------------------------------
 # Solver
 # --------------------------------------------------------------------------
 
@@ -616,7 +902,7 @@ def icgn_first_order(
     params: ICGNParams | None = None,
     initial_guess: np.ndarray | None = None,
 ) -> ICGNResult:
-    """Solve first-order IC-GN / ZNSSD for every point.
+    """Solve first-order (affine, 6-parameter) IC-GN / ZNSSD for every point.
 
     Parameters
     ----------
@@ -627,6 +913,8 @@ def icgn_first_order(
         omitted a regular grid from :func:`make_grid` is used.
     params:
         Correlation parameters; defaults to :class:`ICGNParams`.
+        ``params.shape_order`` is *not* consulted -- this entry point names
+        its order. Use :func:`icgn` to dispatch on the field instead.
     initial_guess:
         ``(n, 6)`` warp parameters, or ``(n, 2)`` displacements, used to seed
         the iteration. When omitted, the seed is the FFT-CC integer search if
@@ -635,6 +923,59 @@ def icgn_first_order(
     An empty ``points`` array is a valid AOI and returns empty result arrays
     of the right shapes and dtypes rather than raising.
     """
+    return _icgn(reference, target, points, params, initial_guess, order=1)
+
+
+def icgn_second_order(
+    reference: np.ndarray,
+    target: np.ndarray,
+    points: np.ndarray | None = None,
+    params: ICGNParams | None = None,
+    initial_guess: np.ndarray | None = None,
+) -> ICGNResult:
+    """Solve second-order (quadratic, 12-parameter) IC-GN / ZNSSD.
+
+    Same contract as :func:`icgn_first_order`, with ``result.p`` widened to
+    ``(n, 12)``, ordered ``(u, u_x, u_y, u_xx, u_xy, u_yy, v, v_x, v_y, v_xx,
+    v_xy, v_yy)``. ``initial_guess`` additionally accepts ``(n, 6)`` affine
+    warps, which are embedded with zero curvature -- feeding it a converged
+    first-order field is the cheap way to keep the extra six parameters out of
+    trouble on large deformations.
+
+    The quadratic terms buy accuracy where the displacement field is curved
+    inside one subset (bending, the neighbourhood of a crack tip or a hole)
+    and cost precision where it is not: twelve parameters are fitted from the
+    same pixels, so the noise floor rises and the Hessian is worse
+    conditioned. The first-order solver stays the default for that reason.
+    """
+    return _icgn(reference, target, points, params, initial_guess, order=2)
+
+
+def icgn(
+    reference: np.ndarray,
+    target: np.ndarray,
+    points: np.ndarray | None = None,
+    params: ICGNParams | None = None,
+    initial_guess: np.ndarray | None = None,
+) -> ICGNResult:
+    """Dispatch to the solver named by ``params.shape_order`` (default 1)."""
+    params = params or ICGNParams()
+    return _icgn(
+        reference, target, points, params, initial_guess, order=params.shape_order
+    )
+
+
+def _icgn(
+    reference: np.ndarray,
+    target: np.ndarray,
+    points: np.ndarray | None,
+    params: ICGNParams | None,
+    initial_guess: np.ndarray | None,
+    order: int,
+) -> ICGNResult:
+    """Order-generic IC-GN core; see the public wrappers for the contract."""
+    shape = _SHAPE_FUNCTIONS[_check_order(order)]
+    n_params = shape.n_params
     params = params or ICGNParams()
     reference = _as_image(reference, "reference")
     target = _as_image(target, "target")
@@ -649,13 +990,14 @@ def icgn_first_order(
     points = _as_points(points)
     n_points = points.shape[0]
     if n_points == 0:
-        return _empty_result(params)
+        return _empty_result(params, shape)
 
     radius = params.subset_radius
     offsets = np.arange(-radius, radius + 1, dtype=np.float64)
     dx, dy = np.meshgrid(offsets, offsets)
     dx = dx.ravel()
     dy = dy.ravel()
+    basis = shape.basis(dx, dy)
 
     ref_scale = _contrast_scale(reference)
     tgt_scale = _contrast_scale(target)
@@ -674,20 +1016,21 @@ def icgn_first_order(
         initial_guess,
         n_points,
         max(ref_scale, tgt_scale),
+        shape,
     )
 
-    p_out = np.zeros((n_points, 6), dtype=np.float64)
+    p_out = np.zeros((n_points, n_params), dtype=np.float64)
     zncc_out = np.full(n_points, -1.0, dtype=np.float64)
     iters_out = np.zeros(n_points, dtype=np.int32)
     status_out = np.full(n_points, int(Status.UNCOMPUTED), dtype=np.int32)
     cov_out = (
-        np.full((n_points, 6, 6), np.nan, dtype=np.float64)
+        np.full((n_points, n_params, n_params), np.nan, dtype=np.float64)
         if params.compute_covariance
         else None
     )
 
     height, width = reference.shape
-    scale = np.array([1.0, radius, radius, 1.0, radius, radius], dtype=np.float64)
+    scale = shape.scale(radius)
 
     for index in range(n_points):
         x0, y0 = points[index]
@@ -717,7 +1060,7 @@ def icgn_first_order(
         fx = gx_interp.sample(sample_x, sample_y)
         fy = gy_interp.sample(sample_x, sample_y)
         # Steepest-descent images: grad f . dW/dp, evaluated at p = 0.
-        jacobian = np.column_stack((fx, fx * dx, fx * dy, fy, fy * dx, fy * dy))
+        jacobian = shape.steepest_descent(fx, fy, basis)
 
         hessian_raw = jacobian.T @ jacobian
         # Conditioning is judged on the scaled Hessian (spec §2.6): the raw
@@ -726,12 +1069,12 @@ def icgn_first_order(
         # parameterisation as much as the subset. A subset textured in one
         # direction only (stripes, a ramp) is genuinely rank-deficient and
         # must be rejected rather than rescued by the diagonal loading.
-        if not _well_conditioned(hessian_raw, radius, params.max_hessian_cond):
+        if not _well_conditioned(hessian_raw, scale, params.max_hessian_cond):
             status_out[index] = int(Status.SINGULAR_HESSIAN)
             continue
 
-        trace_scale = float(np.trace(hessian_raw)) / 6.0
-        hessian_raw = hessian_raw + params.hessian_reg * trace_scale * np.eye(6)
+        trace_scale = float(np.trace(hessian_raw)) / n_params
+        hessian_raw = hessian_raw + params.hessian_reg * trace_scale * np.eye(n_params)
         hessian = (2.0 / (f_norm * f_norm)) * hessian_raw
         try:
             cho = np.linalg.cholesky(hessian)
@@ -746,8 +1089,8 @@ def icgn_first_order(
 
         for iteration in range(1, params.max_iter + 1):
             used_iterations = iteration
-            warped_x = x0 + dx + p[0] + p[1] * dx + p[2] * dy
-            warped_y = y0 + dy + p[3] + p[4] * dx + p[5] * dy
+            warped_x = sample_x + basis @ p[: shape.n_half]
+            warped_y = sample_y + basis @ p[shape.n_half :]
             if (
                 warped_x.min() < 0.0
                 or warped_y.min() < 0.0
@@ -772,12 +1115,15 @@ def icgn_first_order(
             zncc = float(np.dot(f_centred, g_centred) / (f_norm * g_norm))
 
             try:
-                p = compose_inverse(p, delta_p)
+                p = shape.compose_inverse(p, delta_p)
             except np.linalg.LinAlgError:
                 status = int(Status.SINGULAR_HESSIAN)
                 break
 
-            if not np.all(np.isfinite(p)) or math.hypot(p[0], p[3]) > params.max_disp:
+            if (
+                not np.all(np.isfinite(p))
+                or math.hypot(p[0], p[shape.v_index]) > params.max_disp
+            ):
                 status = int(Status.DIVERGED)
                 break
 
@@ -788,8 +1134,8 @@ def icgn_first_order(
         if status == int(Status.CONVERGED):
             # Recompute ZNCC at the final warp so the reported quality matches
             # the returned parameters rather than the previous iterate.
-            warped_x = x0 + dx + p[0] + p[1] * dx + p[2] * dy
-            warped_y = y0 + dy + p[3] + p[4] * dx + p[5] * dy
+            warped_x = sample_x + basis @ p[: shape.n_half]
+            warped_y = sample_y + basis @ p[shape.n_half :]
             if (
                 warped_x.min() < 0.0
                 or warped_y.min() < 0.0
@@ -834,6 +1180,7 @@ def icgn_first_order(
         iterations=iters_out,
         status=status_out,
         covariance=cov_out,
+        shape_order=shape.order,
     )
 
 
@@ -858,29 +1205,35 @@ def _as_points(points: np.ndarray) -> np.ndarray:
     return array
 
 
-def _empty_result(params: ICGNParams) -> ICGNResult:
+def _empty_result(params: ICGNParams, shape: _ShapeFunction) -> ICGNResult:
     """Result for an empty AOI: right shapes, right dtypes, no points."""
+    k = shape.n_params
     return ICGNResult(
         x=np.zeros(0, dtype=np.float64),
         y=np.zeros(0, dtype=np.float64),
-        p=np.zeros((0, 6), dtype=np.float64),
+        p=np.zeros((0, k), dtype=np.float64),
         zncc=np.zeros(0, dtype=np.float64),
         iterations=np.zeros(0, dtype=np.int32),
         status=np.zeros(0, dtype=np.int32),
         covariance=(
-            np.zeros((0, 6, 6), dtype=np.float64) if params.compute_covariance else None
+            np.zeros((0, k, k), dtype=np.float64) if params.compute_covariance else None
         ),
+        shape_order=shape.order,
     )
 
 
-def _well_conditioned(hessian_raw: np.ndarray, radius: int, max_cond: float) -> bool:
-    """``cond(S H S) <= max_cond`` with ``S = diag(1, r, r, 1, r, r)``.
+def _well_conditioned(
+    hessian_raw: np.ndarray, scale: np.ndarray, max_cond: float
+) -> bool:
+    """``cond(S H S) <= max_cond`` with ``S = diag(scale)``.
 
     The scaling puts every parameter in "pixels of motion at the subset edge",
     which is the same normalisation the convergence test uses, so the
-    condition number describes the subset rather than the units.
+    condition number describes the subset rather than the units. It matters
+    more at second order, where the raw columns span ``1`` to ``r^2``: without
+    the rescaling a perfectly good 21x21 subset would look ill-conditioned
+    purely because ``r^2 = 100``.
     """
-    scale = np.array([1.0, radius, radius, 1.0, radius, radius], dtype=np.float64)
     scaled = hessian_raw * scale[:, None] * scale[None, :]
     eigenvalues = np.linalg.eigvalsh(scaled)
     largest = float(eigenvalues[-1])
@@ -898,6 +1251,7 @@ def _resolve_initial_guess(
     initial_guess: np.ndarray | None,
     n_points: int,
     contrast_scale: float,
+    shape: _ShapeFunction,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Seeds plus a per-point flag saying whether a seed could be produced.
 
@@ -906,21 +1260,28 @@ def _resolve_initial_guess(
     confident answer to a question that was never asked (``NO_INITIAL_GUESS``
     in the spec §2.6 failure table).
     """
-    seeds = np.zeros((n_points, 6), dtype=np.float64)
+    n_params = shape.n_params
+    seeds = np.zeros((n_points, n_params), dtype=np.float64)
     seed_ok = np.ones(n_points, dtype=bool)
     if initial_guess is not None:
         guess = np.atleast_2d(np.asarray(initial_guess, dtype=np.float64))
         if guess.shape[0] == 1 and n_points > 1:
             guess = np.repeat(guess, n_points, axis=0)
-        if guess.shape == (n_points, 6):
+        if guess.shape == (n_points, n_params):
             seeds[:] = guess
         elif guess.shape == (n_points, 2):
             seeds[:, 0] = guess[:, 0]
-            seeds[:, 3] = guess[:, 1]
+            seeds[:, shape.v_index] = guess[:, 1]
+        elif shape.order == 2 and guess.shape == (n_points, 6):
+            # An affine field, most usefully a converged first-order solve,
+            # embedded with zero curvature.
+            seeds[:, :3] = guess[:, :3]
+            seeds[:, 6:9] = guess[:, 3:]
         else:
+            accepted = "2" if n_params == 6 else "2, 6"
             raise ValueError(
-                f"initial_guess must have shape ({n_points}, 2) or "
-                f"({n_points}, 6), got {guess.shape}"
+                f"initial_guess must have shape ({n_points}, k) with k in "
+                f"({accepted}, {n_params}), got {guess.shape}"
             )
         if not np.all(np.isfinite(seeds)):
             raise ValueError("initial_guess must be finite")
@@ -941,5 +1302,5 @@ def _resolve_initial_guess(
                 seed_ok[index] = False
                 continue
             seeds[index, 0] = u0
-            seeds[index, 3] = v0
+            seeds[index, shape.v_index] = v0
     return seeds, seed_ok
