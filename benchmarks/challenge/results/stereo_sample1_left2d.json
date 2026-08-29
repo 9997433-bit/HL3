@@ -1,0 +1,21 @@
+{
+  "calibration": "missing",
+  "claim": "Left-camera 2D diagnostic on official Translate.zip. Not a Stereo-DIC Challenge 3D score: no Zhang/Brown ingest, no triangulation, not comparable to the paper's <80 \u00b5m figure.",
+  "deformed": "/workspace/benchmarks/challenge/cache/stereo/sample1/extract/35-mm/Step02 00,-10-sys1-0000_0.tif",
+  "image_shape": [
+    2048,
+    2448
+  ],
+  "lens": "35-mm",
+  "n_points": 750,
+  "paper": "https://doi.org/10.1007/s11340-024-01077-7",
+  "reference": "/workspace/benchmarks/challenge/cache/stereo/sample1/extract/35-mm/Step01 00,00-sys1-0000_0.tif",
+  "sample": "stereo-challenge-1.0-sample1-translate",
+  "search_radius_px": 48,
+  "step_px": 80,
+  "subset_px": 21,
+  "u_mean_px": -1.7834432088023437,
+  "v_mean_px": 0.7605722957865572,
+  "valid_fraction": 0.012,
+  "zncc_median": 0.87743211995102
+}

@@ -1,0 +1,21 @@
+{
+  "claim": "HL3 Sample 14 diagnostic. Not a VIC comparison.",
+  "deformed": "/workspace/benchmarks/challenge/cache/2d/Sample14/Sample14 L1 Amp0.1.tif",
+  "filename_amplitude_px": 0.1,
+  "ground_truth": "none-in-zip; filename claims Amp0.1 px. Not a published 12-code table entry.",
+  "image_shape": [
+    589,
+    2048
+  ],
+  "l_vsg_px": 85,
+  "n_points": 4410,
+  "paper": "https://doi.org/10.1007/s11340-017-0349-0",
+  "reference": "/workspace/benchmarks/challenge/cache/2d/Sample14/Sample14 Reference.tif",
+  "sample": "2d-challenge-1.0-sample14",
+  "step_px": 16,
+  "subset_px": 21,
+  "v_peak_abs_px": 0.1999267155597138,
+  "v_rms_px": 0.021809768547616754,
+  "valid_fraction": 1.0,
+  "zncc_median": 0.9931221231435108
+}

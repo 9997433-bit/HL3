@@ -1,0 +1,42 @@
+# HL3 DIC 应变分析软件 — 主调度器进度
+
+- **任务目标**：规划并分阶段建设两款 DIC 应变分析软件（二维 / 三维），对标并最终超过 Correlated Solutions 的 VIC-2D 与 VIC-3D。
+- **当前阶段**：S1–S4 实施（用户要求做到 S4 停止总结）。SOP 每轮 10=4/3/3，共 3 轮实施。S5/S6 不做。
+- **工作分支**：`cursor/dic-sota-plan-259d`  
+  （平台强制模板 `cursor/<name>-259d`；SOP 中的 `agent/<task-name>` 映射为本分支。）
+- **父模型**：Cursor Grok 4.6（`cursor-grok-4.6-high`）
+- **并发规则（已更正，强制）**：每轮固定 **10 个子代理 = 4×fable + 3×opus-fast + 3×gpt-sol**。  
+  先前文档误写 2+2+2=6，已废弃。三轮循环均按 4/3/3 执行。
+
+## 模型映射（禁止静默降级）
+
+| 简称 | 实际 slug | 每轮数量 | 推荐职能 |
+|------|-----------|----------|----------|
+| fable | `claude-fable-5-thinking-xhigh` | **4** | 架构规划、多维审计、SOTA 标准与验收 |
+| opus-fast | `claude-opus-5-thinking-high-fast` | **3** | 核心算法/模块落地、高覆盖单测、原子修复 |
+| gpt-sol | `gpt-5.6-sol-xhigh-fast` | **3** | 探针脚本、基准、边界探索、兜底校验 |
+
+## Round 状态
+
+| 轮次 | 状态 | 派发 | 产物 |
+|------|------|------|------|
+| Round 1 初始构建与基线探索 | COMPLETE | **10**（4/3/3） | `round1/` + `ROUND1_BRIEF.md` |
+| Round 2 靶向重构与深度优化 | COMPLETE | **10**（4/3/3） | `round2/` + `ROUND2_BRIEF.md` |
+| Round 3 SOTA 打磨与最终验收 | COMPLETE | **10**（4/3/3） | `round3/` + `ROUND3_BRIEF.md`；pytest **232 passed** |
+| Impl-R1（S1） | COMPLETE | **10**（4/3/3） | 二阶 ICGN + strain + pipeline；460 passed |
+| Impl-R2（S2+S3） | COMPLETE | **10**（4/3/3） | match + dic3d + UQ；689 passed |
+| Impl-R3（S4） | IN_PROGRESS | **10**（4/3/3） | CLI/viz/FEA/GUI；然后停止 |
+
+## 法律与环境红线
+
+- **禁止**破解、盗版镜像、密钥生成、逆向 VIC 二进制。
+- 官方 30 天评估版存在，但为 **Windows 安装包 + PC 专属 12 位密钥申请**。本 Cloud Agent 环境为 Linux，无法完成合法许可评估安装。
+- 分析基线仅使用：官方公开网页/宣传册、已发表论文、iDICs 良好实践、GitHub 开源实现、公开评测集。
+
+## 关键发现（父调度器预研）
+
+详见 `research/`。摘要：
+
+1. 对标产品是 **VIC-2D 8** 与 **VIC-3D 11.4**，不是可自由分发的科研代码。
+2. 产品形态是“软件 + 相机/标定/散斑/采集（VIC-Snap）+ 实时（VIC-Gauge）+ 可视化（iris）+ Python 扩展（vicpyx）”的闭环，而不仅是相关算法。
+3. 要超过它们，必须在 **算法精度/鲁棒性、吞吐、跨平台、不确定度量化、FEA 闭环、多相机、开源生态与可重复性** 上同时超越，而不是只写一个相关器。

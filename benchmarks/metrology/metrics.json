@@ -1,0 +1,602 @@
+{
+  "schema": "hl3.metrology.metrics.v1",
+  "recorded_date_utc": "2026-08-28",
+  "execution": {
+    "device": "cpu",
+    "gpu_used": false,
+    "cuda_visible_devices": "",
+    "platform": "Linux-6.12.94+-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "numpy": "2.4.4",
+    "source_revision_after_runs": "1bcc1deef3d6247d2fa1cbf4d7d6719d1d2d608c",
+    "source_blobs": {
+      "tests/test_icgn_synth.py": "4c6def4d2adb1a834bcd2960b3bccfd0e6264e69",
+      "src/hl3/correlate/icgn.py": "dd58142b55b4cb1f0bfb7348f59d811bab75b1d6",
+      "src/hl3/stereo/calibrate.py": "03e10d1dbe045aafab2c6ee3f05e5fccd96cab52",
+      ".agent_workspace/round2/scripts/noise_floor_stub.py": "4797ee55a0f042872ee0a6c754263a4ccfaa5f64",
+      ".agent_workspace/round2/scripts/interpolation_scurve.py": "871cee7e5dcdd3f92570b95a1a1f1d3d1f960bb7"
+    }
+  },
+  "test_suite": {
+    "command": "python3 -m pytest tests src/tests -q",
+    "status": "pass",
+    "passed": 87,
+    "failed": 0,
+    "skipped": 0,
+    "wall_time_seconds": 8.66
+  },
+  "icgn_synthetic_translation": {
+    "status": "pass",
+    "test": "tests/test_icgn_synth.py::test_subpixel_translation_recovered",
+    "method": "CPU first-order affine IC-GN with ZNSSD and prefiltered cubic B-spline interpolation",
+    "generator": "independent oversampled Fourier-shift synthetic speckle",
+    "config": {
+      "image_size_px": [
+        192,
+        192
+      ],
+      "subset_size_px": [
+        21,
+        21
+      ],
+      "step_px": 8,
+      "poi_count": 196,
+      "oversample": 8,
+      "speckle_sigma_px": 1.4,
+      "speckle_density_per_px2": 0.08,
+      "seed": 20260828,
+      "interpolation": "prefiltered cubic B-spline",
+      "shape_function": "first-order affine",
+      "noise_sigma_gray": 0.0,
+      "true_displacement_px": {
+        "u": 0.37,
+        "v": -0.42
+      }
+    },
+    "metrics": {
+      "valid_count": 196,
+      "valid_fraction": 1.0,
+      "all_converged": true,
+      "bias_px": {
+        "u": 0.000437634239650399,
+        "v": -0.00020852386824916658
+      },
+      "std_px": {
+        "u": 0.0009756348739264387,
+        "v": 0.0011101816166312964
+      },
+      "mean_absolute_error_px": 0.0008077597687841582,
+      "rmse_px": 0.0010973212457552903,
+      "max_absolute_error_px": 0.005252713538971221,
+      "zncc": {
+        "minimum": 0.9992724235951568,
+        "mean": 0.9999148577718494
+      },
+      "iterations": {
+        "mean": 4.178571428571429,
+        "maximum": 7
+      }
+    },
+    "regression_limits": {
+      "mean_absolute_error_px_lt": 0.005,
+      "absolute_component_bias_px_lt": 0.005,
+      "required_valid_fraction": 1.0
+    }
+  },
+  "stereo_synthetic_triangulation": {
+    "status": "measured-no-formal-gate",
+    "importable": true,
+    "entrypoint": "hl3.stereo.calibrate.run_synthetic_experiment",
+    "method": "two-view nonlinear triangulation with exact synthetic pinhole cameras",
+    "config": {
+      "seed": 20260828,
+      "trials": 60,
+      "point_count": 1681,
+      "input_noise_sigma_px_per_camera": 0.02,
+      "baseline_mm": 254.0,
+      "standoff_mm": 648.0,
+      "stereo_angle_deg": 22.177428694710688,
+      "focal_length_px": 10144.927536231884,
+      "image_size_px": [
+        2448,
+        2048
+      ]
+    },
+    "metrics": {
+      "noisy_rms_3d_um": 4.897097935230754,
+      "noisy_rms_z_um": 4.71372803620743,
+      "noisy_p95_3d_um": 9.348296085825048,
+      "noisy_max_3d_um": 20.242542444607174,
+      "noise_free_rms_3d_um": 3.310592134289438e-11,
+      "noise_free_rms_z_um": 3.188272269453903e-11,
+      "noise_free_reprojection_rmse_px": 1.160090527450227e-13
+    },
+    "scope_note": "This is a closed-loop pinhole geometry result with exact calibration, not an end-to-end Stereo-DIC or Challenge score."
+  },
+  "noise_floor_stub": {
+    "status": "diagnostic-stub-no-formal-gate",
+    "schema": "hl3.round2.noise-floor-stub.v1",
+    "script": ".agent_workspace/round2/scripts/noise_floor_stub.py",
+    "method": "two independently noisy observations of one static synthetic speckle image; one linearized subset-translation least-squares step at known zero displacement",
+    "scope_note": "The displacement values are diagnostic stub numbers, not production ICGN measurements.",
+    "config": {
+      "image_size_px": [
+        96,
+        96
+      ],
+      "subset_size_px": [
+        31,
+        31
+      ],
+      "step_px": 16,
+      "poi_count": 16,
+      "oversample": 8,
+      "speckle_sigma_px": 1.25,
+      "speckle_density_per_px2": 0.08,
+      "trials": 30,
+      "seed": 20260828,
+      "interpolation": "not applicable to linearized zero-shift diagnostic",
+      "shape_function": "translation-only linearized diagnostic"
+    },
+    "results": [
+      {
+        "input_noise_sigma_gray": 0.0,
+        "difference_std_gray": 0.0,
+        "saturated_sample_fraction": 0.0,
+        "u": {
+          "bias_px": 0.0,
+          "pooled_std_px": 0.0,
+          "spatial_std_mean_px": 0.0,
+          "temporal_std_mean_px": 0.0,
+          "three_sigma_px": 0.0
+        },
+        "v": {
+          "bias_px": 0.0,
+          "pooled_std_px": 0.0,
+          "spatial_std_mean_px": 0.0,
+          "temporal_std_mean_px": 0.0,
+          "three_sigma_px": 0.0
+        }
+      },
+      {
+        "input_noise_sigma_gray": 0.25,
+        "difference_std_gray": 0.3523098089552484,
+        "saturated_sample_fraction": 0.005269820601851852,
+        "u": {
+          "bias_px": -9.973572712412901e-07,
+          "pooled_std_px": 0.0004413634515038877,
+          "spatial_std_mean_px": 0.0004033601744418486,
+          "temporal_std_mean_px": 0.0004381352335812291,
+          "three_sigma_px": 0.001324090354511663
+        },
+        "v": {
+          "bias_px": -4.9003240149356996e-05,
+          "pooled_std_px": 0.00045992692758379486,
+          "spatial_std_mean_px": 0.00042900341470120454,
+          "temporal_std_mean_px": 0.00044919965625969443,
+          "three_sigma_px": 0.0013797807827513847
+        }
+      },
+      {
+        "input_noise_sigma_gray": 0.5,
+        "difference_std_gray": 0.7035904641018278,
+        "saturated_sample_fraction": 0.006409143518518519,
+        "u": {
+          "bias_px": -0.0001036622565206718,
+          "pooled_std_px": 0.0009086680948054961,
+          "spatial_std_mean_px": 0.0008243924277279842,
+          "temporal_std_mean_px": 0.0009012633046490712,
+          "three_sigma_px": 0.0027260042844164884
+        },
+        "v": {
+          "bias_px": -3.99964941570645e-05,
+          "pooled_std_px": 0.0008926280685149419,
+          "spatial_std_mean_px": 0.0008262844591486918,
+          "temporal_std_mean_px": 0.00088684211724565,
+          "three_sigma_px": 0.0026778842055448257
+        }
+      },
+      {
+        "input_noise_sigma_gray": 1.0,
+        "difference_std_gray": 1.4032312436944392,
+        "saturated_sample_fraction": 0.008776403356481482,
+        "u": {
+          "bias_px": -0.00016455256551314024,
+          "pooled_std_px": 0.0017820801261809994,
+          "spatial_std_mean_px": 0.0015675851188087064,
+          "temporal_std_mean_px": 0.0017679062679639502,
+          "three_sigma_px": 0.005346240378542998
+        },
+        "v": {
+          "bias_px": -0.00018068766266314066,
+          "pooled_std_px": 0.0017170040335489337,
+          "spatial_std_mean_px": 0.001601495945375212,
+          "temporal_std_mean_px": 0.001665355794395112,
+          "three_sigma_px": 0.005151012100646801
+        }
+      },
+      {
+        "input_noise_sigma_gray": 2.0,
+        "difference_std_gray": 2.799603453229665,
+        "saturated_sample_fraction": 0.012733289930555556,
+        "u": {
+          "bias_px": -0.00012564892006422258,
+          "pooled_std_px": 0.0033068805600803166,
+          "spatial_std_mean_px": 0.0031874268903443925,
+          "temporal_std_mean_px": 0.0032917177404052415,
+          "three_sigma_px": 0.00992064168024095
+        },
+        "v": {
+          "bias_px": 0.0003521812256791724,
+          "pooled_std_px": 0.003596437749644866,
+          "spatial_std_mean_px": 0.003320717624178664,
+          "temporal_std_mean_px": 0.0035707447509450542,
+          "three_sigma_px": 0.010789313248934597
+        }
+      },
+      {
+        "input_noise_sigma_gray": 4.0,
+        "difference_std_gray": 5.569590913775508,
+        "saturated_sample_fraction": 0.01968135127314815,
+        "u": {
+          "bias_px": -0.0003185836211356587,
+          "pooled_std_px": 0.007414401279678017,
+          "spatial_std_mean_px": 0.0067206738742016285,
+          "temporal_std_mean_px": 0.007340750942924709,
+          "three_sigma_px": 0.02224320383903405
+        },
+        "v": {
+          "bias_px": -0.0004279965954804574,
+          "pooled_std_px": 0.006745284472324517,
+          "spatial_std_mean_px": 0.006275021611500227,
+          "temporal_std_mean_px": 0.006726517675817619,
+          "three_sigma_px": 0.02023585341697355
+        }
+      },
+      {
+        "input_noise_sigma_gray": 8.0,
+        "difference_std_gray": 10.969477439855659,
+        "saturated_sample_fraction": 0.032056568287037034,
+        "u": {
+          "bias_px": -0.001396840890925007,
+          "pooled_std_px": 0.015423486405529926,
+          "spatial_std_mean_px": 0.014034025756546619,
+          "temporal_std_mean_px": 0.01525302287054241,
+          "three_sigma_px": 0.046270459216589774
+        },
+        "v": {
+          "bias_px": 0.00045967194726688595,
+          "pooled_std_px": 0.013891883242142725,
+          "spatial_std_mean_px": 0.012895652294108436,
+          "temporal_std_mean_px": 0.013687215671841092,
+          "three_sigma_px": 0.04167564972642818
+        }
+      }
+    ]
+  },
+  "s1": {
+    "schema": "hl3.metrology.s1.v1",
+    "recorded_date_utc": "2026-08-28",
+    "status": "partial",
+    "exit_gate_pass": false,
+    "execution": {
+      "device": "cpu",
+      "gpu_used": false,
+      "cuda_visible_devices": "",
+      "platform": "Linux-6.12.94+-x86_64-with-glibc2.39",
+      "python": "3.12.3",
+      "numpy": "2.4.4",
+      "tested_source_revision": "e43e22281bca8e29f7cffbd93f164a65d0d86904",
+      "source_blobs": {
+        "tests/test_icgn_synth.py": "eca7b8fac581ed357ed01fcd93bcd66dd881e5ae",
+        "src/hl3/correlate/icgn.py": "3b509d4091f328428bb8f44990027a68673b0e81",
+        "src/hl3/io/hdf5_schema.py": "a8766cf8d5357303bf5388afc80a76449e977289",
+        "docs/schema-hdf5.md": "028cf8199a03a710998b647419a32809f27247a0",
+        "pyproject.toml": "25b9b1d7c4ad9d2968c7f378d54bffcb456e87ad"
+      }
+    },
+    "test_suite": {
+      "command": "CUDA_VISIBLE_DEVICES='' python3 -m pytest tests src/tests -q",
+      "status": "pass",
+      "passed": 232,
+      "failed": 0,
+      "skipped": 0,
+      "pytest_time_seconds": 11.07,
+      "wall_time_seconds": 11.551
+    },
+    "gates": {
+      "a1_displacement_noise_floor": {
+        "status": "diagnostic-pass-formal-gate-not-evaluable",
+        "formal_gate_evaluable": false,
+        "formal_gate_reason": "The required DIC Challenge 2.0 noisy-static data are not present; this run uses three independent synthetic speckle seeds.",
+        "dataset": "independent oversampled Fourier-rendered synthetic static speckle pairs with independent Gaussian read noise",
+        "method": "CPU first-order affine IC-GN with ZNSSD and prefiltered cubic B-spline interpolation",
+        "config": {
+          "image_size_px": [
+            192,
+            192
+          ],
+          "subset_size_px": [
+            31,
+            31
+          ],
+          "step_px": 10,
+          "poi_count_per_seed": 144,
+          "speckle_seeds": [
+            20260828,
+            20260829,
+            20260830
+          ],
+          "input_noise_sigma_gray_per_image": 2.0,
+          "true_displacement_px": {
+            "u": 0.0,
+            "v": 0.0
+          },
+          "interpolation": "prefiltered cubic B-spline",
+          "shape_function": "first-order affine"
+        },
+        "metrics": {
+          "mean_spatial_std_px": {
+            "u": 0.003426125578018859,
+            "v": 0.0035559160532079685
+          },
+          "pooled_std_px": {
+            "u": 0.0036264718525848985,
+            "v": 0.003660021831367077
+          },
+          "valid_count": 432,
+          "requested_count": 432,
+          "valid_fraction": 1.0
+        },
+        "per_seed": [
+          {
+            "seed": 20260828,
+            "bias_px": {
+              "u": 0.00022676696944003998,
+              "v": 0.0007543639481755343
+            },
+            "spatial_std_px": {
+              "u": 0.0034011561226714544,
+              "v": 0.0034468394376572795
+            },
+            "valid_count": 144,
+            "requested_count": 144
+          },
+          {
+            "seed": 20260829,
+            "bias_px": {
+              "u": 0.0006176174201293392,
+              "v": -7.692786626911405e-05
+            },
+            "spatial_std_px": {
+              "u": 0.0035061355531133035,
+              "v": 0.0036132731898359826
+            },
+            "valid_count": 144,
+            "requested_count": 144
+          },
+          {
+            "seed": 20260830,
+            "bias_px": {
+              "u": -0.0021191868614672386,
+              "v": -0.0014194640410070672
+            },
+            "spatial_std_px": {
+              "u": 0.0033710850582718195,
+              "v": 0.003607635532130644
+            },
+            "valid_count": 144,
+            "requested_count": 144
+          }
+        ],
+        "regression_limit": {
+          "mean_spatial_std_u_px_lte": 0.01
+        },
+        "diagnostic_pass": true
+      },
+      "a2_interpolation_s_curve": {
+        "status": "pass",
+        "test": "tests/test_icgn_synth.py::test_subpixel_phase_sweep",
+        "dataset": "independent oversampled Fourier-shift synthetic speckle",
+        "method": "CPU first-order affine IC-GN with ZNSSD and prefiltered cubic B-spline interpolation",
+        "config": {
+          "image_size_px": [
+            160,
+            160
+          ],
+          "subset_size_px": [
+            21,
+            21
+          ],
+          "step_px": 12,
+          "poi_count_per_phase": 49,
+          "speckle_seed": 20260828,
+          "phases_px": [
+            0.0,
+            0.1,
+            0.25,
+            0.5,
+            0.75,
+            0.9
+          ],
+          "input_noise_sigma_gray": 0.0,
+          "interpolation": "prefiltered cubic B-spline",
+          "shape_function": "first-order affine"
+        },
+        "metrics": {
+          "phase_bias_peak_to_peak_u_px": 0.001729512986506075,
+          "max_absolute_phase_bias_u_px": 0.0009997656972937255,
+          "valid_count": 294,
+          "requested_count": 294,
+          "valid_fraction": 1.0
+        },
+        "per_phase": [
+          {
+            "phase_px": 0.0,
+            "bias_u_px": 0.0,
+            "bias_v_px": 0.0
+          },
+          {
+            "phase_px": 0.1,
+            "bias_u_px": 0.0005179946385405831,
+            "bias_v_px": -4.001297676530498e-05
+          },
+          {
+            "phase_px": 0.25,
+            "bias_u_px": 0.0007297472892123496,
+            "bias_v_px": 1.6741213968807005e-05
+          },
+          {
+            "phase_px": 0.5,
+            "bias_u_px": -0.00016788463823639026,
+            "bias_v_px": 7.204773919765652e-05
+          },
+          {
+            "phase_px": 0.75,
+            "bias_u_px": -0.0009997656972937255,
+            "bias_v_px": 6.833723312833006e-05
+          },
+          {
+            "phase_px": 0.9,
+            "bias_u_px": -0.0005313825767445385,
+            "bias_v_px": 2.5714055217717912e-05
+          }
+        ],
+        "regression_limit": {
+          "phase_bias_peak_to_peak_u_px_lte": 0.01
+        },
+        "pass": true,
+        "scope_note": "This is the phase grid exercised by the current test suite, not the full multi-direction, multi-subset and multi-seed protocol matrix."
+      },
+      "a4_strain_noise_floor": {
+        "status": "not-evaluated",
+        "formal_gate_evaluable": false,
+        "regression_limit": {
+          "strain_noise_floor_microstrain_lte": 100
+        },
+        "vsg_px": null,
+        "reason": "No production strain implementation or strain test exists in the tested source revision."
+      },
+      "g6_schema_freeze": {
+        "status": "pending",
+        "observed_schema_version": "1.0.0-draft.2",
+        "required_schema_version": "1.0.0",
+        "pass": false
+      }
+    },
+    "scope_note": "S1 is not closed: A4 was not measurable, the schema remains a draft, and A1 lacks the required Challenge dataset even though the three-seed synthetic diagnostic is below its numeric limit."
+  },
+  "s2": {
+    "schema": "hl3.metrology.s2.v1",
+    "recorded_date_utc": "2026-08-28",
+    "status": "not-evaluated",
+    "exit_gate_pass": false,
+    "execution": {
+      "device": "cpu",
+      "gpu_used": false,
+      "cuda_visible_devices": "",
+      "tested_source_revision": "42d04327c3840c63b6be6e8d0961686bc567094c"
+    },
+    "module_availability": {
+      "hl3.stereo.calibrate": true,
+      "hl3.stereo.triangulate": true,
+      "hl3.stereo.match": false,
+      "hl3.pipeline.dic3d": false
+    },
+    "test_suite": {
+      "command": "CUDA_VISIBLE_DEVICES='' python3 -m pytest tests/test_s2_s3_smoke.py -q -rs",
+      "status": "skipped",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 2,
+      "combined_s2_s3_wall_time_seconds": 0.614
+    },
+    "gates": {
+      "a5_stereo_3d_accuracy": {
+        "status": "not-evaluated",
+        "reason": "hl3.stereo.match and hl3.pipeline.dic3d are not implemented in this checkout."
+      },
+      "a6_calibration_accuracy": {
+        "status": "not-evaluated",
+        "reason": "No Impl-R2 calibration metrology test is present in this checkout."
+      },
+      "a4_3d_strain_noise_floor": {
+        "status": "not-evaluated",
+        "reason": "The S2 3D pipeline and curved-surface strain measurement are unavailable."
+      }
+    },
+    "scope_note": "The pre-existing calibration and triangulation modules are importable, but the Impl-R2 stereo matching and 3D pipeline surfaces are absent; no S2 performance value is claimed."
+  },
+  "s3": {
+    "schema": "hl3.metrology.s3.v1",
+    "recorded_date_utc": "2026-08-28",
+    "status": "not-evaluated",
+    "exit_gate_pass": false,
+    "execution": {
+      "device": "cpu",
+      "gpu_used": false,
+      "cuda_visible_devices": "",
+      "tested_source_revision": "42d04327c3840c63b6be6e8d0961686bc567094c"
+    },
+    "module_availability": {
+      "hl3.uq": false,
+      "hl3.cli.validate": false
+    },
+    "test_suite": {
+      "command": "CUDA_VISIBLE_DEVICES='' python3 -m pytest tests/test_s2_s3_smoke.py -q -rs",
+      "status": "skipped",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 2,
+      "combined_s2_s3_wall_time_seconds": 0.614
+    },
+    "gates": {
+      "c1_deterministic_reproduction": {
+        "status": "not-evaluated",
+        "reason": "No S3 deterministic cross-run metrology test is present."
+      },
+      "c2_uncertainty_propagation": {
+        "status": "not-evaluated",
+        "reason": "hl3.uq is not implemented in this checkout."
+      },
+      "c3_schema_validation": {
+        "status": "not-evaluated",
+        "reason": "hl3.cli.validate is not implemented in this checkout."
+      }
+    },
+    "scope_note": "All targeted S3 package surfaces were skipped as unavailable; no reproducibility, uncertainty, coverage, or validation result is claimed."
+  },
+  "challenge": {
+    "schema": "hl3.metrology.challenge.v1",
+    "recorded_date_utc": "2026-08-29",
+    "status": "partial",
+    "exit_gate_pass": false,
+    "source_page": "https://idics.org/challenge/",
+    "images_in_git": false,
+    "ci_downloads": false,
+    "sample15": {
+      "file": "benchmarks/challenge/results/sample15_k200.json",
+      "linecut_rmse_px": 0.08252927996535597,
+      "linecut_bias_px": -0.034502957120693456,
+      "valid_fraction": 0.6360100027785496,
+      "subset_px": 21,
+      "step_px": 16,
+      "search_radius_px": 16,
+      "scorer": "independent Python line-cut vs CommandedDisplacementLineCut.xlsx",
+      "not_claimed": "VIC/MatchID comparison; official MATLAB Challenge scorer"
+    },
+    "sample14": {
+      "file": "benchmarks/challenge/results/sample14.json",
+      "v_rms_px": 0.021809768547616754,
+      "valid_fraction": 1.0,
+      "ground_truth": "none in zip"
+    },
+    "stereo_sample1": {
+      "file": "benchmarks/challenge/results/stereo_sample1_left2d.json",
+      "mode": "left-camera 2D diagnostic only",
+      "valid_fraction": 0.012,
+      "calibration": "missing",
+      "not_claimed": "Stereo-DIC Challenge 3D score; paper <80 um residual"
+    }
+  }
+}
