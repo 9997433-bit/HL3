@@ -8,18 +8,18 @@
     2000
   ],
   "k": 200,
-  "l_vsg_px": 149,
-  "linecut_bias_px": -0.027547856852157333,
-  "linecut_n": 17,
-  "linecut_rmse_px": 0.06029225118581689,
-  "measured_mid_px": -3.567311371177482,
-  "n_points": 1830,
+  "l_vsg_px": 85,
+  "linecut_bias_px": -0.034502957120693456,
+  "linecut_n": 35,
+  "linecut_rmse_px": 0.08252927996535597,
+  "measured_mid_px": -3.509848511720909,
+  "n_points": 7198,
   "paper": "https://doi.org/10.1007/s11340-017-0349-0",
   "reference": "/workspace/benchmarks/challenge/cache/2d/Sample15/Reference.tif",
   "sample": "2d-challenge-1.0-sample15",
   "search_radius_px": 16,
-  "step_px": 32,
+  "step_px": 16,
   "subset_px": 21,
-  "valid_fraction": 0.6366120218579235,
-  "zncc_median": 0.9937826226161752
+  "valid_fraction": 0.6360100027785496,
+  "zncc_median": 0.9936905187352738
 }

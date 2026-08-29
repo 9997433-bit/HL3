@@ -77,6 +77,7 @@ def run_left_camera_diagnostic(
     subset: int = 21,
     step: int = 40,
     lens: str = "35-mm",
+    write: bool = True,
 ) -> dict[str, Any]:
     archive = translate_zip()
     if archive is None:
@@ -117,15 +118,16 @@ def run_left_camera_diagnostic(
             "no triangulation, not comparable to the paper's <80 µm figure."
         ),
     }
-    out = (
-        Path(__file__).resolve().parents[3]
-        / "benchmarks"
-        / "challenge"
-        / "results"
-        / "stereo_sample1_left2d.json"
-    )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if write:
+        out = (
+            Path(__file__).resolve().parents[3]
+            / "benchmarks"
+            / "challenge"
+            / "results"
+            / "stereo_sample1_left2d.json"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return payload
 
 

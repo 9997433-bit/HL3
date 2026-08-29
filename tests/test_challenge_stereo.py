@@ -19,7 +19,9 @@ def test_left_camera_diagnostic_if_cached() -> None:
     pytest.importorskip("PIL")
     from hl3.bench.challenge_stereo import run_left_camera_diagnostic
 
-    payload = run_left_camera_diagnostic(subset=21, step=80, lens="35-mm")
+    payload = run_left_camera_diagnostic(
+        subset=21, step=80, lens="35-mm", write=False
+    )
     assert payload["calibration"] == "missing"
     assert "Stereo-DIC Challenge 3D score" in payload["claim"]
     assert payload["n_points"] > 0

@@ -172,6 +172,7 @@ def run_sample14(
     subset: int = 21,
     step: int = 16,
     which: str = "L1",
+    write: bool = True,
 ) -> dict[str, Any]:
     folder = sample14_dir()
     if folder is None:
@@ -206,7 +207,8 @@ def run_sample14(
         "ground_truth": "none-in-zip; filename claims Amp0.1 px. Not a published 12-code table entry.",
         "claim": "HL3 Sample 14 diagnostic. Not a VIC comparison.",
     }
-    _write_json("sample14.json", payload)
+    if write:
+        _write_json("sample14.json", payload)
     return payload
 
 
@@ -216,6 +218,7 @@ def run_sample15(
     step: int = 16,
     k: int = 200,
     search_radius: int = 16,
+    write: bool = True,
 ) -> dict[str, Any]:
     folder = sample15_dir()
     if folder is None:
@@ -264,7 +267,8 @@ def run_sample15(
             "Not a VIC/MatchID comparison and not the official MATLAB scorer."
         ),
     }
-    _write_json(f"sample15_k{k}.json", payload)
+    if write:
+        _write_json(f"sample15_k{k}.json", payload)
     return payload
 
 

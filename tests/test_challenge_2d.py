@@ -57,7 +57,11 @@ def test_sample15_linecut_rmse_if_cached() -> None:
     pytest.importorskip("PIL")
     from hl3.bench.challenge2d import run_sample15
 
-    payload = run_sample15(subset=21, step=32, k=200, search_radius=16)
+    # step=32 is a faster smoke than the published step=16 protocol;
+    # write=False so the test cannot clobber the canonical JSON.
+    payload = run_sample15(
+        subset=21, step=32, k=200, search_radius=16, write=False
+    )
     assert payload["valid_fraction"] > 0.5
     assert payload["linecut_rmse_px"] < 2.0
 
