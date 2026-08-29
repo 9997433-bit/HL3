@@ -103,6 +103,10 @@ COMMANDS: dict[str, _Command] = {
         "validate a .hl3 container against docs/schema-hdf5.md",
         takes_prog=False,
     ),
+    "challenge": _Command(
+        "hl3.cli.challenge.main",
+        "download or run official DIC Challenge samples",
+    ),
 }
 
 

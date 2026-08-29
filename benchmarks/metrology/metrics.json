@@ -565,5 +565,38 @@
       }
     },
     "scope_note": "All targeted S3 package surfaces were skipped as unavailable; no reproducibility, uncertainty, coverage, or validation result is claimed."
+  },
+  "challenge": {
+    "schema": "hl3.metrology.challenge.v1",
+    "recorded_date_utc": "2026-08-29",
+    "status": "partial",
+    "exit_gate_pass": false,
+    "source_page": "https://idics.org/challenge/",
+    "images_in_git": false,
+    "ci_downloads": false,
+    "sample15": {
+      "file": "benchmarks/challenge/results/sample15_k200.json",
+      "linecut_rmse_px": 0.08252927996535597,
+      "linecut_bias_px": -0.034502957120693456,
+      "valid_fraction": 0.6360100027785496,
+      "subset_px": 21,
+      "step_px": 16,
+      "search_radius_px": 16,
+      "scorer": "independent Python line-cut vs CommandedDisplacementLineCut.xlsx",
+      "not_claimed": "VIC/MatchID comparison; official MATLAB Challenge scorer"
+    },
+    "sample14": {
+      "file": "benchmarks/challenge/results/sample14.json",
+      "v_rms_px": 0.021809768547616754,
+      "valid_fraction": 1.0,
+      "ground_truth": "none in zip"
+    },
+    "stereo_sample1": {
+      "file": "benchmarks/challenge/results/stereo_sample1_left2d.json",
+      "mode": "left-camera 2D diagnostic only",
+      "valid_fraction": 0.012,
+      "calibration": "missing",
+      "not_claimed": "Stereo-DIC Challenge 3D score; paper <80 um residual"
+    }
   }
 }

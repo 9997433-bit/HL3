@@ -21,3 +21,5 @@ htmlcov/
 !spec/conformance/**/*.hl3
 /out/
 /bench-out/
+# Official DIC Challenge images are downloaded, never committed (L-5).
+/benchmarks/challenge/cache/

@@ -6,7 +6,7 @@
 
 HL3 是一套**开放、可审计**的数字图像相关（DIC）测量内核，目标覆盖 **HL3-2D**（单相机平面 DIC）与 **HL3-3D**（立体 / 多目 DIC）两条产品线，二者共用同一个 `hl3-core` 地基。
 
-> **当前状态：S1–S4 预 alpha。** 这是可审计的 CPU/NumPy 测量内核 + 离线 2D 无头链，**不是** VIC-2D 8 / VIC-3D 11 的可替换产品。算法对标与超越公式均未闭合，见 [`.agent_workspace/s1s4/IR4_USER_SUMMARY.md`](.agent_workspace/s1s4/IR4_USER_SUMMARY.md)。原则是「先正确、后快」；吞吐数字未经公平对比协议测量。
+> **当前状态：S1–S4 预 alpha + Challenge 证据起步。** 这是可审计的 CPU/NumPy 测量内核 + 离线 2D 无头链，**不是** VIC 可替换产品。已从 iDICs 官方 Drive 跑通 2D Challenge Sample 15 线切割（独立 Python 计分）；Stereo 1.0 仅缓存了 Translate.zip，**没有** 3D 成绩。详见 [`.agent_workspace/challenge/IR5_CLOSE.md`](.agent_workspace/challenge/IR5_CLOSE.md)。
 
 ---
 
@@ -33,7 +33,7 @@ HL3 是一套**开放、可审计**的数字图像相关（DIC）测量内核，
 ```bash
 git clone https://github.com/9997433-bit/HL3.git && cd HL3
 python3 -m pip install -e '.[test,hdf5]'
-python3 -m pytest -q tests src/tests        # 708 passed on this S4 收口 revision
+python3 -m pytest -q tests src/tests        # 719 passed on this Challenge-round revision
 ```
 
 运行时依赖只有 **NumPy**：`h5py` 仅在真正读写 `.hl3` 文件时需要（缺失时相关测试自动跳过而不是失败），`blake3` 缺失时哈希如实降级为 `blake2b-256`。不装包也可以直接用源码树：`PYTHONPATH=src python3 -m pytest -q tests src/tests`。
@@ -61,6 +61,7 @@ python3 -m pytest -q tests src/tests        # 708 passed on this S4 收口 revis
 PYTHONPATH=src python3 -m pytest -q tests src/tests
 PYTHONPATH=src python3 -m hl3 doctor --no-selftest
 PYTHONPATH=src python3 -m hl3 run --synthetic --frames 2 --size 48x48 --subset 17 --strain off --out /tmp/hl3.npz
+PYTHONPATH=src python3 -m hl3 challenge download --list
 ```
 
 一个最小的相关器例子（`MockCapture` 的第 1 帧相对第 0 帧整体平移 `u = +2 px`、`v = +1 px`）：

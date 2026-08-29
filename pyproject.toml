@@ -22,6 +22,7 @@ dependencies = ["numpy>=1.24"]
 [project.optional-dependencies]
 test = ["pytest>=7"]
 viz = ["matplotlib"]
+bench = ["pillow", "gdown>=5"]
 # hl3.io.hdf5_schema 的常量与位域不需要 h5py；只有读写 .hl3 容器时需要。
 hdf5 = ["h5py>=3.8"]
 # 规范的 @hash_algo 是 blake3-256；缺失时降级为 blake2b-256 并如实记录。
@@ -37,3 +38,6 @@ where = ["src"]
 minversion = "7.0"
 testpaths = ["tests", "src/tests"]
 pythonpath = ["src"]
+markers = [
+  "slow: needs the gitignored DIC Challenge cache",
+]
